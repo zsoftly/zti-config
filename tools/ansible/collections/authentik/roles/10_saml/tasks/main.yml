@@ -1,0 +1,718 @@
+# Create SAML Providers and Applications
+# Supports: --check --diff for dry runs
+---
+- name: Get existing SAML providers
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/providers/saml/"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: existing_providers
+  check_mode: false
+
+- name: Get default authorization flow
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/flows/instances/?slug=default-provider-authorization-implicit-consent"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: auth_flow
+  check_mode: false
+
+- name: Get default invalidation flow
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/flows/instances/?slug=default-invalidation-flow"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: invalidation_flow
+  check_mode: false
+
+- name: Get signing key (self-signed certificate)
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/crypto/certificatekeypairs/?name=authentik%20Self-signed%20Certificate"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: signing_key
+  check_mode: false
+
+- name: Get all property mappings
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/propertymappings/all/"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: all_mappings
+  check_mode: false
+
+- name: Filter SAML property mappings
+  ansible.builtin.set_fact:
+    saml_mappings:
+      json:
+        results: "{{ all_mappings.json.results | selectattr('managed', 'defined') | selectattr('managed', 'search', 'goauthentik.io/providers/saml/') | list }}"
+
+- name: Build default SAML property mapping PKs
+  ansible.builtin.set_fact:
+    default_saml_mapping_pks: "{{ saml_mappings.json.results | map(attribute='pk') | list }}"
+
+# Custom SAML property mappings for providers (e.g., Wazuh roles)
+- name: Build providers with custom property mappings
+  ansible.builtin.set_fact:
+    providers_with_custom_mappings: "{{ saml_providers | selectattr('custom_property_mapping', 'defined') | list }}"
+
+- name: Get existing SAML property mappings (custom)
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/propertymappings/provider/saml/"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: existing_saml_mappings
+  check_mode: false
+  when: providers_with_custom_mappings | length > 0
+
+- name: Create custom SAML property mappings
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/propertymappings/provider/saml/"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      name: "{{ item.custom_property_mapping.name }}"
+      saml_name: "{{ item.custom_property_mapping.saml_name }}"
+      expression: "{{ item.custom_property_mapping.expression }}"
+    status_code: [200, 201]
+  loop: "{{ providers_with_custom_mappings }}"
+  loop_control:
+    label: "{{ item.custom_property_mapping.name }}"
+  when:
+    - not ansible_check_mode
+    - providers_with_custom_mappings | length > 0
+    - item.custom_property_mapping.name not in (existing_saml_mappings.json.results | default([]) | map(attribute='name') | list)
+  register: created_custom_mappings
+
+- name: Update existing custom SAML property mappings
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/propertymappings/provider/saml/{{ (existing_saml_mappings.json.results | selectattr('name', 'equalto', item.custom_property_mapping.name) | first).pk }}/"
+    method: PATCH
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      saml_name: "{{ item.custom_property_mapping.saml_name }}"
+      expression: "{{ item.custom_property_mapping.expression }}"
+    status_code: [200]
+  loop: "{{ providers_with_custom_mappings }}"
+  loop_control:
+    label: "{{ item.custom_property_mapping.name }}"
+  when:
+    - not ansible_check_mode
+    - providers_with_custom_mappings | length > 0
+    - item.custom_property_mapping.name in (existing_saml_mappings.json.results | default([]) | map(attribute='name') | list)
+
+- name: Refresh SAML property mappings after custom creation
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/propertymappings/provider/saml/"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: all_saml_mappings
+  check_mode: false
+  when: providers_with_custom_mappings | length > 0
+
+- name: Build custom mapping PK lookup
+  ansible.builtin.set_fact:
+    custom_mapping_pk_lookup: "{{ dict(all_saml_mappings.json.results | map(attribute='name') | zip(all_saml_mappings.json.results | map(attribute='pk'))) }}"
+  when:
+    - providers_with_custom_mappings | length > 0
+    - all_saml_mappings is defined
+
+# Custom NameID mappings for providers
+- name: Build providers with custom NameID mappings
+  ansible.builtin.set_fact:
+    providers_with_custom_nameid: "{{ saml_providers | selectattr('custom_nameid_mapping', 'defined') | list }}"
+
+- name: Create custom NameID mappings
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/propertymappings/provider/saml/"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      name: "{{ item.custom_nameid_mapping.name }}"
+      saml_name: "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/name"
+      expression: "{{ item.custom_nameid_mapping.expression }}"
+    status_code: [200, 201]
+  loop: "{{ providers_with_custom_nameid }}"
+  loop_control:
+    label: "{{ item.custom_nameid_mapping.name }}"
+  when:
+    - not ansible_check_mode
+    - providers_with_custom_nameid | length > 0
+    - item.custom_nameid_mapping.name not in (existing_saml_mappings.json.results | default([]) | map(attribute='name') | list)
+  register: created_custom_nameid
+
+- name: Update existing custom NameID mappings
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/propertymappings/provider/saml/{{ (existing_saml_mappings.json.results | selectattr('name', 'equalto', item.custom_nameid_mapping.name) | first).pk }}/"
+    method: PATCH
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      saml_name: "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/name"
+      expression: "{{ item.custom_nameid_mapping.expression }}"
+    status_code: [200]
+  loop: "{{ providers_with_custom_nameid }}"
+  loop_control:
+    label: "{{ item.custom_nameid_mapping.name }}"
+  when:
+    - not ansible_check_mode
+    - providers_with_custom_nameid | length > 0
+    - item.custom_nameid_mapping.name in (existing_saml_mappings.json.results | default([]) | map(attribute='name') | list)
+
+- name: Refresh all SAML mappings after NameID creation
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/propertymappings/provider/saml/"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: all_saml_mappings_refreshed
+  check_mode: false
+  when: providers_with_custom_nameid | length > 0
+
+- name: Build NameID mapping PK lookup (all SAML mappings)
+  ansible.builtin.set_fact:
+    all_saml_nameid_mappings: "{{ (all_saml_mappings_refreshed.json.results if all_saml_mappings_refreshed is defined else all_saml_mappings.json.results if all_saml_mappings is defined else []) }}"
+
+- name: Get existing provider names
+  ansible.builtin.set_fact:
+    existing_provider_names: "{{ existing_providers.json.results | map(attribute='name') | list }}"
+
+- name: Show providers that would be created (check mode)
+  ansible.builtin.debug:
+    msg: "Would create SAML provider: {{ item.name }} for {{ item.acs_url }}"
+  loop: "{{ saml_providers }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when:
+    - ansible_check_mode
+    - item.name not in existing_provider_names
+
+- name: Build property mappings per provider (default + custom if defined)
+  ansible.builtin.set_fact:
+    provider_property_mappings: >-
+      {{ dict(saml_providers | map(attribute='name') | zip(
+         saml_providers | map('dict2items') | map('selectattr', 'key', 'equalto', 'custom_property_mapping') | map('first', default={}) | map(attribute='value', default={}) | map(attribute='name', default='') | list
+       )) }}
+
+- name: Create SAML providers
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/providers/saml/"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      name: "{{ item.name }}"
+      authorization_flow: "{{ auth_flow.json.results[0].pk }}"
+      invalidation_flow: "{{ invalidation_flow.json.results[0].pk }}"
+      acs_url: "{{ item.acs_url }}"
+      audience: "{{ item.audience }}"
+      issuer: "{{ authentik_url }}/application/saml/{{ item.app_slug }}/sso/binding/redirect/"
+      sp_binding: "post"
+      signing_kp: "{{ signing_key.json.results[0].pk }}"
+      sign_assertion: true
+      sign_response: true
+      name_id_mapping: "{{ (all_saml_nameid_mappings | selectattr('name', 'equalto', item.custom_nameid_mapping.name) | first).pk if item.custom_nameid_mapping is defined else (saml_mappings.json.results | selectattr('managed', 'equalto', item.name_id_mapping | default('')) | first | default({})).pk | default('') }}"
+      property_mappings: "{{ default_saml_mapping_pks + ([custom_mapping_pk_lookup[item.custom_property_mapping.name]] if (item.custom_property_mapping is defined and custom_mapping_pk_lookup is defined and item.custom_property_mapping.name in custom_mapping_pk_lookup) else []) }}"
+      assertion_valid_not_before: "minutes=-5"
+      assertion_valid_not_on_or_after: "minutes=5"
+      session_valid_not_on_or_after: "hours=8"
+      default_name_id_policy: "{{ item.name_id_format | default('urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress') }}"
+    status_code: [200, 201]
+  loop: "{{ saml_providers }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when:
+    - not ansible_check_mode
+    - item.name not in existing_provider_names
+  register: created_providers
+
+- name: Update existing SAML providers
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/providers/saml/{{ (existing_providers.json.results | selectattr('name', 'equalto', item.name) | first).pk }}/"
+    method: PATCH
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      acs_url: "{{ item.acs_url }}"
+      audience: "{{ item.audience }}"
+      issuer: "{{ authentik_url }}/application/saml/{{ item.app_slug }}/sso/binding/redirect/"
+      signing_kp: "{{ signing_key.json.results[0].pk }}"
+      sign_assertion: true
+      sign_response: true
+      name_id_mapping: "{{ (all_saml_nameid_mappings | selectattr('name', 'equalto', item.custom_nameid_mapping.name) | first).pk if item.custom_nameid_mapping is defined else (saml_mappings.json.results | selectattr('managed', 'equalto', item.name_id_mapping | default('')) | first | default({})).pk | default('') }}"
+      property_mappings: "{{ default_saml_mapping_pks + ([custom_mapping_pk_lookup[item.custom_property_mapping.name]] if (item.custom_property_mapping is defined and custom_mapping_pk_lookup is defined and item.custom_property_mapping.name in custom_mapping_pk_lookup) else []) }}"
+      session_valid_not_on_or_after: "hours=8"
+      default_name_id_policy: "{{ item.name_id_format | default('urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress') }}"
+    status_code: [200]
+  loop: "{{ saml_providers }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when:
+    - not ansible_check_mode
+    - item.name in existing_provider_names
+
+- name: Refresh providers list
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/providers/saml/"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: all_providers
+  check_mode: false
+
+- name: Get existing applications
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/core/applications/?page_size=500"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: existing_apps
+  check_mode: false
+
+- name: Build existing app slugs list
+  ansible.builtin.set_fact:
+    existing_app_slugs: "{{ existing_apps.json.results | map(attribute='slug') | list }}"
+
+- name: Create applications for SAML providers
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/core/applications/"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      name: "{{ item.app_name }}"
+      slug: "{{ item.app_slug }}"
+      provider: "{{ (all_providers.json.results | selectattr('name', 'equalto', item.name) | first).pk }}"
+      policy_engine_mode: "any"
+      meta_launch_url: "{{ item.launch_url | default('') }}"
+      open_in_new_tab: true
+    status_code: [200, 201, 400]
+  loop: "{{ saml_providers }}"
+  loop_control:
+    label: "{{ item.app_slug }}"
+  when:
+    - not ansible_check_mode
+    - item.app_slug not in existing_app_slugs
+  register: created_apps
+  changed_when: created_apps.status in [200, 201]
+  failed_when: created_apps.status == 400 and 'already exists' not in (created_apps.json | default({}) | string)
+
+- name: Update existing applications
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/core/applications/{{ item.app_slug }}/"
+    method: PATCH
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      name: "{{ item.app_name }}"
+      meta_launch_url: "{{ item.launch_url | default('') }}"
+      open_in_new_tab: true
+    status_code: [200]
+  loop: "{{ saml_providers }}"
+  loop_control:
+    label: "{{ item.app_slug }}"
+  when:
+    - not ansible_check_mode
+    - item.app_slug in (existing_apps.json.results | map(attribute='slug') | list)
+
+# Refresh applications list after create/update
+- name: Refresh applications list
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/core/applications/?page_size=500"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: refreshed_apps
+  check_mode: false
+
+# Upload application icons using shared task
+- name: Upload SAML icons
+  ansible.builtin.include_tasks: ../../common/tasks/upload_icons.yml
+  vars:
+    icon_items: "{{ saml_providers }}"
+    icon_slug_attr: "app_slug"
+    icon_apps_list: "{{ refreshed_apps }}"
+    force_icon_upload: true  # Always upload icons (even if app already has one set)
+
+# Group-based access control via policy bindings
+- name: Get existing policy bindings
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/policies/bindings/"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: existing_bindings
+  check_mode: false
+
+- name: Get existing expression policies
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/policies/expression/"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: existing_policies
+  check_mode: false
+
+# Cleanup orphaned policy bindings using shared task
+- name: Cleanup orphaned SAML policies
+  ansible.builtin.include_tasks: ../../common/tasks/cleanup_policies.yml
+  vars:
+    cleanup_items: "{{ saml_providers }}"
+    cleanup_slug_attr: "app_slug"
+    cleanup_bindings: "{{ existing_bindings }}"
+    cleanup_policies: "{{ existing_policies }}"
+
+# Create/update group access policies for providers with groups
+- name: Build providers requiring group policies
+  ansible.builtin.set_fact:
+    providers_with_groups: "{{ saml_providers | selectattr('groups', 'defined') | list }}"
+
+- name: Create group access policies
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/policies/expression/"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      name: "{{ item.app_slug }}-group-access"
+      expression: |
+        # Allow superusers and users in: {{ item.groups | join(', ') }}
+        if request.user.is_superuser:
+            return True
+        allowed_groups = {{ item.groups | to_json }}
+        user_groups = [g.name for g in request.user.ak_groups.all()]
+        return any(g in user_groups for g in allowed_groups)
+    status_code: [200, 201]
+  loop: "{{ providers_with_groups }}"
+  loop_control:
+    label: "{{ item.app_slug }}"
+  when:
+    - not ansible_check_mode
+    - (item.app_slug ~ '-group-access') not in (existing_policies.json.results | map(attribute='name') | list)
+  register: created_policies
+
+- name: Update existing group access policies
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/policies/expression/{{ (existing_policies.json.results | selectattr('name', 'equalto', item.app_slug ~ '-group-access') | first).pk }}/"
+    method: PATCH
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      expression: |
+        # Allow superusers and users in: {{ item.groups | join(', ') }}
+        if request.user.is_superuser:
+            return True
+        allowed_groups = {{ item.groups | to_json }}
+        user_groups = [g.name for g in request.user.ak_groups.all()]
+        return any(g in user_groups for g in allowed_groups)
+    status_code: [200]
+  loop: "{{ providers_with_groups }}"
+  loop_control:
+    label: "{{ item.app_slug }}"
+  when:
+    - not ansible_check_mode
+    - (item.app_slug ~ '-group-access') in (existing_policies.json.results | map(attribute='name') | list)
+
+- name: Refresh expression policies
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/policies/expression/"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: all_policies
+  check_mode: false
+  when: providers_with_groups | length > 0
+
+- name: Refresh bindings after cleanup
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/policies/bindings/"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: current_bindings
+  check_mode: false
+  when: providers_with_groups | length > 0
+
+# IMPORTANT: Policy bindings require policybindingmodel_ptr_id, not the app pk
+# See: commit 02659b6 for similar fix in password-policy.yml
+- name: Build app binding target lookup (policybindingmodel_ptr_id)
+  ansible.builtin.set_fact:
+    app_binding_targets: "{{ app_binding_targets | default({}) | combine({item.slug: item.policybindingmodel_ptr_id}) }}"
+  loop: "{{ refreshed_apps.json.results }}"
+  loop_control:
+    label: "{{ item.slug }}"
+  when:
+    - providers_with_groups | length > 0
+    - item.policybindingmodel_ptr_id is defined
+
+- name: Build existing binding targets
+  ansible.builtin.set_fact:
+    existing_binding_targets: "{{ current_bindings.json.results | map(attribute='target') | list }}"
+  when: providers_with_groups | length > 0
+
+- name: Build policy pk lookup
+  ansible.builtin.set_fact:
+    policy_pk_lookup: "{{ dict(all_policies.json.results | map(attribute='name') | zip(all_policies.json.results | map(attribute='pk'))) }}"
+  when:
+    - providers_with_groups | length > 0
+    - all_policies is defined
+
+- name: Create policy bindings for applications
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/policies/bindings/"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      policy: "{{ policy_pk_lookup[item.app_slug ~ '-group-access'] }}"
+      target: "{{ app_binding_targets[item.app_slug] }}"
+      order: 0
+      enabled: true
+      timeout: 30
+    status_code: [200, 201]
+  loop: "{{ providers_with_groups }}"
+  loop_control:
+    label: "{{ item.app_slug }}"
+  when:
+    - not ansible_check_mode
+    - all_policies is defined
+    - item.app_slug in (app_binding_targets | default({}))
+    - (item.app_slug ~ '-group-access') in policy_pk_lookup
+    - app_binding_targets[item.app_slug] not in existing_binding_targets
+
+# SCIM Provider Configuration
+- name: Build providers with SCIM enabled
+  ansible.builtin.set_fact:
+    providers_with_scim: "{{ saml_providers | selectattr('scim', 'defined') | selectattr('scim.enabled', 'equalto', true) | list }}"
+
+- name: Get existing SCIM providers
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/providers/scim/"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: existing_scim_providers
+  check_mode: false
+  when: providers_with_scim | length > 0
+
+- name: Get all groups for SCIM sync
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/core/groups/"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: all_groups_scim
+  check_mode: false
+  when: providers_with_scim | length > 0
+
+- name: Get SCIM email mapping (from 09_scim_defaults)
+  ansible.builtin.set_fact:
+    scim_email_mapping: "{{ all_mappings.json.results | selectattr('name', 'equalto', 'SCIM User Mapping (Email as userName)') | first | default(none) }}"
+  when: providers_with_scim | length > 0
+
+- name: Warn if SCIM email mapping not found
+  ansible.builtin.debug:
+    msg: "SCIM email mapping not found. Run --tags scim_defaults first for consistent SAML/SCIM identity matching."
+  when:
+    - providers_with_scim | length > 0
+    - scim_email_mapping is none
+
+- name: Get SCIM property mappings
+  ansible.builtin.set_fact:
+    scim_user_mappings: "{{ [scim_email_mapping.pk] if scim_email_mapping is not none else (all_mappings.json.results | selectattr('managed', 'defined') | selectattr('managed', 'search', 'goauthentik.io/providers/scim/user') | map(attribute='pk') | list) }}"
+    scim_group_mappings: "{{ all_mappings.json.results | selectattr('managed', 'defined') | selectattr('managed', 'search', 'goauthentik.io/providers/scim/group') | map(attribute='pk') | list }}"
+  when: providers_with_scim | length > 0
+
+- name: Show SCIM providers that would be created (check mode)
+  ansible.builtin.debug:
+    msg: "Would create SCIM provider: {{ item.app_slug }}-scim for {{ item.scim.url }}"
+  loop: "{{ providers_with_scim }}"
+  loop_control:
+    label: "{{ item.app_slug }}"
+  when:
+    - ansible_check_mode
+    - providers_with_scim | length > 0
+    - (item.app_slug ~ '-scim') not in (existing_scim_providers.json.results | default([]) | map(attribute='name') | list)
+
+- name: Create SCIM providers
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/providers/scim/"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      name: "{{ item.app_slug }}-scim"
+      url: "{{ item.scim.url }}"
+      token: "{{ lookup('vars', item.scim.token_var) }}"
+      filter_group: "{{ (all_groups_scim.json.results | selectattr('name', 'equalto', item.scim.sync_group) | first).pk }}"
+      property_mappings: "{{ scim_user_mappings }}"
+      # Only sync groups if sync_groups is true (default) - GitLab doesn't support group SCIM
+      property_mappings_group: "{{ scim_group_mappings if (item.scim.sync_groups | default(true)) else [] }}"
+      exclude_users_service_account: true
+    status_code: [200, 201]
+  loop: "{{ providers_with_scim }}"
+  loop_control:
+    label: "{{ item.app_slug }}"
+  when:
+    - not ansible_check_mode
+    - providers_with_scim | length > 0
+    - lookup('vars', item.scim.token_var, default='') | length > 0
+    - (item.app_slug ~ '-scim') not in (existing_scim_providers.json.results | default([]) | map(attribute='name') | list)
+  register: created_scim_providers
+  no_log: true
+
+- name: Update existing SCIM providers
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/providers/scim/{{ (existing_scim_providers.json.results | selectattr('name', 'equalto', item.app_slug ~ '-scim') | first).pk }}/"
+    method: PATCH
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      url: "{{ item.scim.url }}"
+      token: "{{ lookup('vars', item.scim.token_var) }}"
+      filter_group: "{{ (all_groups_scim.json.results | selectattr('name', 'equalto', item.scim.sync_group) | first).pk }}"
+      property_mappings: "{{ scim_user_mappings }}"
+      # Only sync groups if sync_groups is true (default) - GitLab doesn't support group SCIM
+      property_mappings_group: "{{ scim_group_mappings if (item.scim.sync_groups | default(true)) else [] }}"
+      exclude_users_service_account: true
+    status_code: [200]
+  loop: "{{ providers_with_scim }}"
+  loop_control:
+    label: "{{ item.app_slug }}"
+  when:
+    - not ansible_check_mode
+    - providers_with_scim | length > 0
+    - lookup('vars', item.scim.token_var, default='') | length > 0
+    - (item.app_slug ~ '-scim') in (existing_scim_providers.json.results | default([]) | map(attribute='name') | list)
+  no_log: true
+
+- name: Warn if SCIM token not configured
+  ansible.builtin.debug:
+    msg: "SCIM token not configured for {{ item.app_slug }}. Add {{ item.scim.token_var }} to vault.yml"
+  loop: "{{ providers_with_scim }}"
+  loop_control:
+    label: "{{ item.app_slug }}"
+  when:
+    - providers_with_scim | length > 0
+    - lookup('vars', item.scim.token_var, default='') | length == 0
+
+# Link SCIM providers as backchannel providers to their applications
+- name: Refresh SCIM providers list
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/providers/scim/"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: refreshed_scim_providers
+  check_mode: false
+  when: providers_with_scim | length > 0
+
+- name: Build SCIM provider PK lookup
+  ansible.builtin.set_fact:
+    scim_provider_pk_lookup: "{{ dict(refreshed_scim_providers.json.results | map(attribute='name') | zip(refreshed_scim_providers.json.results | map(attribute='pk'))) }}"
+  when:
+    - providers_with_scim | length > 0
+    - refreshed_scim_providers.json is defined
+
+- name: Link SCIM providers as backchannel providers to applications
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/core/applications/{{ item.app_slug }}/"
+    method: PATCH
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      backchannel_providers:
+        - "{{ scim_provider_pk_lookup[item.app_slug ~ '-scim'] }}"
+    status_code: [200]
+  loop: "{{ providers_with_scim }}"
+  loop_control:
+    label: "{{ item.app_slug }}"
+  when:
+    - not ansible_check_mode
+    - providers_with_scim | length > 0
+    - scim_provider_pk_lookup is defined
+    - (item.app_slug ~ '-scim') in scim_provider_pk_lookup
+    - lookup('vars', item.scim.token_var, default='') | length > 0
+
+- name: Display SAML configuration summary
+  ansible.builtin.debug:
+    msg:
+      - "========================================"
+      - "SAML Provider: {{ item.name }}"
+      - "Application: {{ item.app_name }}"
+      - "SSO URL: {{ authentik_url }}/application/saml/{{ item.app_slug }}/sso/binding/redirect/"
+      - "Metadata: {{ authentik_url }}/application/saml/{{ item.app_slug }}/metadata/"
+      - "ACS URL: {{ item.acs_url }}"
+      - "Audience: {{ item.audience }}"
+  loop: "{{ saml_providers }}"
+  loop_control:
+    label: "{{ item.app_slug }}"
+
+- name: Display SCIM configuration summary
+  ansible.builtin.debug:
+    msg:
+      - "SCIM Provider: {{ item.app_slug }}-scim"
+      - "Syncing group: {{ item.scim.sync_group }}"
+      - "To GitLab: {{ item.scim.url }}"
+  loop: "{{ providers_with_scim }}"
+  loop_control:
+    label: "{{ item.app_slug }}"
+  when:
+    - providers_with_scim | length > 0
+    - lookup('vars', item.scim.token_var, default='') | length > 0

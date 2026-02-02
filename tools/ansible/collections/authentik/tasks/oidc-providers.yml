@@ -1,0 +1,240 @@
+# Create OIDC Providers and Applications
+---
+- name: Get existing providers
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/providers/oauth2/"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: existing_providers
+
+- name: Get default authorization flow
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/flows/instances/?slug=default-provider-authorization-implicit-consent"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: auth_flow
+
+- name: Get default invalidation flow
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/flows/instances/?slug=default-invalidation-flow"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: invalidation_flow
+
+- name: Create OIDC providers
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/providers/oauth2/"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      name: "{{ item.name }}"
+      authorization_flow: "{{ auth_flow.json.results[0].pk }}"
+      invalidation_flow: "{{ invalidation_flow.json.results[0].pk }}"
+      client_type: "{{ item.client_type | default('confidential') }}"
+      redirect_uris: "{{ item.redirect_uris }}"
+    status_code: [200, 201]
+  loop: "{{ oidc_providers }}"
+  when: item.name not in (existing_providers.json.results | map(attribute='name') | list)
+  register: created_providers
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Refresh providers list
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/providers/oauth2/"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: all_providers
+
+- name: Get existing applications
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/core/applications/"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: existing_apps
+
+- name: Build provider lookup map
+  ansible.builtin.set_fact:
+    provider_pk_map: "{{ provider_pk_map | default({}) | combine({item.name: item.pk}) }}"
+  loop: "{{ all_providers.json.results }}"
+  loop_control:
+    label: "{{ item.name }}"
+  no_log: true
+
+- name: Create applications for providers
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/core/applications/"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      name: "{{ item.app_name }}"
+      slug: "{{ item.app_slug }}"
+      provider: "{{ provider_pk_map[item.name] }}"
+      open_in_new_tab: true
+    status_code: [200, 201]
+  loop: "{{ oidc_providers }}"
+  when:
+    - item.app_slug not in (existing_apps.json.results | map(attribute='slug') | list)
+    - item.name in provider_pk_map
+  register: created_apps
+  loop_control:
+    label: "{{ item.app_slug }}"
+
+- name: Build existing apps lookup map
+  ansible.builtin.set_fact:
+    existing_app_map: "{{ existing_app_map | default({}) | combine({item.slug: {'pk': item.pk, 'provider': item.provider}}) }}"
+  loop: "{{ existing_apps.json.results }}"
+  loop_control:
+    label: "{{ item.slug }}"
+
+- name: Link existing applications to providers
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/core/applications/{{ existing_app_map[item.app_slug].pk }}/"
+    method: PATCH
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      provider: "{{ provider_pk_map[item.name] }}"
+      open_in_new_tab: true
+    status_code: [200, 404]
+  loop: "{{ oidc_providers }}"
+  when:
+    - item.app_slug in existing_app_map
+    - item.name in provider_pk_map
+    - existing_app_map[item.app_slug].provider is none or existing_app_map[item.app_slug].provider != provider_pk_map[item.name]
+  register: linked_apps
+  loop_control:
+    label: "{{ item.app_slug }}"
+
+- name: Re-fetch applications after linking
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/core/applications/"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: apps_after_link
+
+- name: Build updated apps lookup
+  ansible.builtin.set_fact:
+    current_app_slugs: "{{ apps_after_link.json.results | map(attribute='slug') | list }}"
+    fresh_app_map: "{{ dict(apps_after_link.json.results | map(attribute='slug') | zip(apps_after_link.json.results)) }}"
+
+- name: Link apps with null provider (retry with fresh PKs)
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/core/applications/{{ fresh_app_map[item.app_slug].pk }}/"
+    method: PATCH
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      provider: "{{ provider_pk_map[item.name] }}"
+      open_in_new_tab: true
+    status_code: [200]
+  loop: "{{ oidc_providers }}"
+  when:
+    - item.app_slug in fresh_app_map
+    - item.name in provider_pk_map
+    - fresh_app_map[item.app_slug].provider is none
+  loop_control:
+    label: "{{ item.app_slug }}"
+
+- name: Create missing applications (not found during link)
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/core/applications/"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      name: "{{ item.item.app_name }}"
+      slug: "{{ item.item.app_slug }}"
+      provider: "{{ provider_pk_map[item.item.name] }}"
+      open_in_new_tab: true
+    status_code: [200, 201]
+  loop: "{{ linked_apps.results }}"
+  when:
+    - item.status is defined
+    - item.status == 404
+    - item.item.app_slug not in current_app_slugs
+  loop_control:
+    label: "{{ item.item.app_slug | default('skipped') }}"
+
+- name: Update managed applications to open in new tab
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/core/applications/{{ fresh_app_map[item.app_slug].pk }}/"
+    method: PATCH
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      open_in_new_tab: true
+    status_code: [200, 404]
+  loop: "{{ oidc_providers }}"
+  when:
+    - item.app_slug in fresh_app_map
+    - not fresh_app_map[item.app_slug].open_in_new_tab | default(false)
+  register: open_tab_results
+  loop_control:
+    label: "{{ item.app_slug }}"
+
+- name: Report apps that could not be updated (no permission)
+  ansible.builtin.debug:
+    msg: "Warning: Cannot update {{ item.item.app_slug }} - token lacks permission (404)"
+  loop: "{{ open_tab_results.results | default([]) }}"
+  when:
+    - item.status is defined
+    - item.status == 404
+  loop_control:
+    label: "{{ item.item.app_slug | default('skipped') }}"
+
+- name: Display OIDC credentials (debug only)
+  ansible.builtin.debug:
+    msg: |
+      Provider: {{ item.name }}
+      Client ID: {{ item.client_id }}
+      Client Secret: {{ item.client_secret }}
+  loop: "{{ all_providers.json.results }}"
+  loop_control:
+    label: "{{ item.name }}"
+  tags: [debug, never]
+  no_log: true
+
+- name: Refresh applications list
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/core/applications/"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: final_apps
+
+- name: OIDC providers summary
+  vars:
+    provider_list: "{{ all_providers.json.results | map(attribute='name') | sort | join(', ') }}"
+    app_list: "{{ final_apps.json.results | map(attribute='slug') | sort | join(', ') }}"
+  ansible.builtin.debug:
+    msg:
+      - "OIDC Providers ({{ all_providers.json.results | length }}): {{ provider_list }}"
+      - "Applications ({{ final_apps.json.results | length }}): {{ app_list }}"

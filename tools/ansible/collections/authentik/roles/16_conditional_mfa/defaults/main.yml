@@ -1,0 +1,25 @@
+# MFA Configuration for Password Authentication
+# OAuth logins bypass the authentication flow entirely, so MFA only applies to password logins
+---
+
+conditional_mfa:
+  # MFA validation stage settings
+  validation_stage:
+    name: "example-mfa-validation"
+    # Force MFA setup if user hasn't configured any MFA device
+    # Options: skip, deny, configure
+    not_configured_action: "configure"
+    # Device classes to accept for MFA
+    device_classes:
+      - totp
+      - webauthn
+      - static
+    # Configuration stages when not_configured_action is 'configure'
+    configuration_stages:
+      - "example-totp-setup"
+
+  # Flow binding configuration
+  flow_binding:
+    flow_slug: "default-authentication-flow"
+    # Order: After password stage (20)
+    order: 30

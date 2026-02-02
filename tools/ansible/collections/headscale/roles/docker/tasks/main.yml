@@ -1,0 +1,107 @@
+---
+# Docker installation role - multi-distro support
+
+# Map architecture to Docker's naming convention
+- name: Set Docker architecture
+  ansible.builtin.set_fact:
+    docker_arch: >-
+      {%- if ansible_architecture in ['x86_64', 'amd64'] -%}amd64
+      {%- elif ansible_architecture in ['aarch64', 'arm64'] -%}arm64
+      {%- elif ansible_architecture == 'armv7l' -%}armhf
+      {%- else -%}{{ ansible_architecture }}
+      {%- endif -%}
+
+- name: Validate Docker architecture is supported
+  ansible.builtin.fail:
+    msg: "Unsupported architecture for Docker: {{ ansible_architecture }} (mapped to {{ docker_arch }})"
+  when: docker_arch not in ['amd64', 'arm64', 'armhf']
+
+- name: Check if Docker is installed
+  ansible.builtin.command:
+    cmd: docker --version
+  register: docker_check
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Install Docker (Debian/Ubuntu)
+  when:
+    - docker_check.rc != 0
+    - ansible_os_family == 'Debian'
+  block:
+    - name: Create keyrings directory
+      ansible.builtin.file:
+        path: /etc/apt/keyrings
+        state: directory
+        mode: "0755"
+
+    - name: Add Docker GPG key
+      ansible.builtin.get_url:
+        url: https://download.docker.com/linux/{{ ansible_distribution | lower }}/gpg
+        dest: /etc/apt/keyrings/docker.asc
+        mode: "0644"
+
+    - name: Add Docker repository
+      ansible.builtin.apt_repository:
+        repo: >-
+          deb [arch={{ docker_arch }}
+          signed-by=/etc/apt/keyrings/docker.asc]
+          https://download.docker.com/linux/{{ ansible_distribution | lower }}
+          {{ ansible_distribution_release }} stable
+        state: present
+        filename: docker
+        update_cache: true
+
+    - name: Install Docker packages (Debian/Ubuntu)
+      ansible.builtin.apt:
+        name:
+          - docker-ce
+          - docker-ce-cli
+          - containerd.io
+          - docker-buildx-plugin
+          - docker-compose-plugin
+        state: present
+        update_cache: true
+      when: not ansible_check_mode  # Skip in check mode - repo may not exist yet
+
+    - name: Check mode notice - Docker install skipped
+      ansible.builtin.debug:
+        msg: "Skipping Docker package install in check mode (repo not yet added)"
+      when: ansible_check_mode
+
+- name: Install Docker (RHEL/Fedora/Rocky)
+  when:
+    - docker_check.rc != 0
+    - ansible_os_family == 'RedHat'
+  block:
+    - name: Add Docker repository (RHEL-based)
+      ansible.builtin.get_url:
+        url: https://download.docker.com/linux/{{ 'rhel' if ansible_distribution in ['RedHat', 'Rocky', 'AlmaLinux'] else ansible_distribution | lower }}/docker-ce.repo
+        dest: /etc/yum.repos.d/docker-ce.repo
+        mode: "0644"
+
+    - name: Install Docker packages (RHEL-based)
+      ansible.builtin.package:
+        name:
+          - docker-ce
+          - docker-ce-cli
+          - containerd.io
+          - docker-buildx-plugin
+          - docker-compose-plugin
+        state: present
+
+- name: Ensure Docker is running
+  ansible.builtin.systemd:
+    name: docker
+    state: started
+    enabled: true
+  when: docker_check.rc == 0 or not ansible_check_mode
+
+- name: Add user to docker group
+  ansible.builtin.user:
+    name: "{{ ansible_user | default('ubuntu') }}"
+    groups: docker
+    append: true
+  when:
+    - ansible_user is defined or ansible_distribution == 'Ubuntu'
+    - docker_check.rc == 0 or not ansible_check_mode

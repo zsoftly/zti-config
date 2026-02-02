@@ -1,0 +1,598 @@
+# Create OIDC Providers and Applications
+# Supports: --check --diff for dry runs
+# CI/CD safe: credentials written to file, not displayed
+---
+
+# Custom email scope mapping for apps requiring email_verified: true (e.g., Vaultwarden)
+# Authentik's default email scope returns email_verified: false, which breaks SSO for some apps
+- name: Get existing scope mappings
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/propertymappings/provider/scope/"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: existing_scope_mappings
+  check_mode: false
+
+- name: Create custom email-verified scope mapping
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/propertymappings/provider/scope/"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      name: "email-verified"
+      scope_name: "email"
+      description: "Custom email scope that returns email_verified: true (for Vaultwarden SSO)"
+      expression: |
+        # Custom mapping for apps that require email_verified: true
+        # Used by: Vaultwarden SSO
+        return {
+            "email": request.user.email,
+            "email_verified": True
+        }
+    status_code: [200, 201]
+  when:
+    - not ansible_check_mode
+    - "'email-verified' not in (existing_scope_mappings.json.results | map(attribute='name') | list)"
+  register: created_email_verified_mapping
+
+- name: Show email-verified mapping status (check mode)
+  ansible.builtin.debug:
+    msg: "{{ 'Would create' if 'email-verified' not in (existing_scope_mappings.json.results | map(attribute='name') | list) else 'Already exists' }}: email-verified scope mapping"
+  when: ansible_check_mode
+
+- name: Get existing providers
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/providers/oauth2/"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: existing_providers
+  check_mode: false
+
+- name: Get default authorization flow
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/flows/instances/?slug=default-provider-authorization-implicit-consent"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: auth_flow
+  check_mode: false
+
+- name: Get default invalidation flow
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/flows/instances/?slug=default-invalidation-flow"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: invalidation_flow
+  check_mode: false
+
+- name: Get signing key (self-signed certificate)
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/crypto/certificatekeypairs/?name=authentik%20Self-signed%20Certificate"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: signing_key
+  check_mode: false
+
+- name: Get all property mappings
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/propertymappings/all/"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: all_mappings
+  check_mode: false
+
+- name: Build default scope mapping PKs list (openid, email, profile)
+  ansible.builtin.set_fact:
+    default_scope_pks: >-
+      {{ all_mappings.json.results
+         | selectattr('managed', 'defined')
+         | selectattr('managed', 'in', [
+             'goauthentik.io/providers/oauth2/scope-openid',
+             'goauthentik.io/providers/oauth2/scope-email',
+             'goauthentik.io/providers/oauth2/scope-profile'
+           ])
+         | map(attribute='pk')
+         | list }}
+    all_scope_mappings: "{{ all_mappings.json.results | selectattr('managed', 'defined') | list }}"
+
+# Build alternate scope list using custom email-verified mapping (for apps requiring email_verified: true)
+- name: Build verified-email scope mapping PKs list (openid, profile + custom email-verified)
+  ansible.builtin.set_fact:
+    verified_email_scope_pks: >-
+      {{
+        (all_mappings.json.results
+         | selectattr('managed', 'defined')
+         | selectattr('managed', 'in', [
+             'goauthentik.io/providers/oauth2/scope-openid',
+             'goauthentik.io/providers/oauth2/scope-profile'
+           ])
+         | map(attribute='pk')
+         | list)
+        +
+        (all_mappings.json.results
+         | selectattr('name', 'equalto', 'email-verified')
+         | map(attribute='pk')
+         | list)
+      }}
+
+- name: Get existing provider names
+  ansible.builtin.set_fact:
+    existing_provider_names: "{{ existing_providers.json.results | map(attribute='name') | list }}"
+
+- name: Show providers that would be created (check mode)
+  ansible.builtin.debug:
+    msg: "Would create OIDC provider: {{ item.name }}"
+  loop: "{{ oidc_providers }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when:
+    - ansible_check_mode
+    - item.name not in existing_provider_names
+
+- name: Create OIDC providers
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/providers/oauth2/"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body: >-
+      {%- set extra_scope_pks = [] -%}
+      {%- if item.extra_scopes is defined -%}
+        {%- for scope in item.extra_scopes -%}
+          {%- set scope_managed = 'goauthentik.io/providers/oauth2/scope-' ~ scope -%}
+          {%- for mapping in all_scope_mappings if mapping.managed == scope_managed -%}
+            {%- set _ = extra_scope_pks.append(mapping.pk) -%}
+          {%- endfor -%}
+        {%- endfor -%}
+      {%- endif -%}
+      {%- set base_scope_pks = verified_email_scope_pks if (item.use_verified_email | default(false)) else default_scope_pks -%}
+      {{
+        {
+          'name': item.name,
+          'authorization_flow': auth_flow.json.results[0].pk,
+          'invalidation_flow': invalidation_flow.json.results[0].pk,
+          'client_type': item.client_type | default('confidential'),
+          'redirect_uris': item.redirect_uris,
+          'signing_key': signing_key.json.results[0].pk,
+          'property_mappings': base_scope_pks + extra_scope_pks
+        } | combine(
+          {'backchannel_logout_url': item.logout_url} if item.logout_url is defined else {}
+        )
+      }}
+    status_code: [200, 201]
+  loop: "{{ oidc_providers }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when:
+    - not ansible_check_mode
+    - item.name not in (existing_providers.json.results | map(attribute='name') | list)
+  register: created_providers
+  no_log: true
+
+- name: Update existing providers (redirect URIs, signing key, scopes, logout URL)
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/providers/oauth2/{{ (existing_providers.json.results | selectattr('name', 'equalto', item.name) | first).pk }}/"
+    method: PATCH
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body: >-
+      {%- set extra_scope_pks = [] -%}
+      {%- if item.extra_scopes is defined -%}
+        {%- for scope in item.extra_scopes -%}
+          {%- set scope_managed = 'goauthentik.io/providers/oauth2/scope-' ~ scope -%}
+          {%- for mapping in all_scope_mappings if mapping.managed == scope_managed -%}
+            {%- set _ = extra_scope_pks.append(mapping.pk) -%}
+          {%- endfor -%}
+        {%- endfor -%}
+      {%- endif -%}
+      {%- set base_scope_pks = verified_email_scope_pks if (item.use_verified_email | default(false)) else default_scope_pks -%}
+      {{
+        {
+          'client_type': item.client_type | default('confidential'),
+          'redirect_uris': item.redirect_uris,
+          'signing_key': signing_key.json.results[0].pk,
+          'property_mappings': base_scope_pks + extra_scope_pks
+        }
+        | combine({'backchannel_logout_url': item.logout_url} if item.logout_url is defined else {})
+      }}
+    status_code: [200]
+  loop: "{{ oidc_providers }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when:
+    - not ansible_check_mode
+    - item.name in existing_provider_names
+  register: updated_providers
+
+- name: Show providers that would be updated (check mode)
+  ansible.builtin.debug:
+    msg: "Would update provider {{ item.name }}: signing_key + {{ 'logout_url=' ~ item.logout_url if item.logout_url is defined else 'no logout_url' }}"
+  loop: "{{ oidc_providers }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when:
+    - ansible_check_mode
+    - item.name in existing_provider_names
+
+- name: Refresh providers list
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/providers/oauth2/"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: all_providers
+  check_mode: false
+  no_log: true
+
+- name: Get existing applications
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/core/applications/?page_size=500"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: existing_apps
+  check_mode: false
+
+- name: Create applications for providers
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/core/applications/"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body: >-
+      {%- set launch_url_value = 'blank://blank' if (item.show_in_library is defined and not item.show_in_library) else (item.launch_url | default('')) -%}
+      {{
+        {
+          'name': item.app_name,
+          'slug': item.app_slug,
+          'provider': (all_providers.json.results | selectattr('name', 'equalto', item.name) | first).pk,
+          'policy_engine_mode': 'any',
+          'open_in_new_tab': true
+        }
+        | combine({'meta_launch_url': launch_url_value} if launch_url_value else {})
+      }}
+    status_code: [200, 201]
+  loop: "{{ oidc_providers }}"
+  loop_control:
+    label: "{{ item.app_slug }}"
+  when:
+    - not ansible_check_mode
+    - item.app_slug not in (existing_apps.json.results | map(attribute='slug') | list)
+  register: created_apps
+
+# Update existing applications with visibility and launch URL settings
+- name: Update application visibility and launch URL settings
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/core/applications/{{ item.app_slug }}/"
+    method: PATCH
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      meta_launch_url: "{{ 'blank://blank' if (item.show_in_library is defined and not item.show_in_library) else (item.launch_url | default('')) }}"
+      open_in_new_tab: true
+    status_code: [200]
+  loop: "{{ oidc_providers }}"
+  loop_control:
+    label: "{{ item.app_slug }}"
+  when:
+    - not ansible_check_mode
+    - item.app_slug in (existing_apps.json.results | map(attribute='slug') | list)
+
+# Refresh applications list after create/update
+- name: Refresh applications list
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/core/applications/?page_size=500"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: refreshed_apps
+  check_mode: false
+
+# Upload application icons using shared task
+- name: Upload OIDC icons
+  ansible.builtin.include_tasks: ../../common/tasks/upload_icons.yml
+  vars:
+    icon_items: "{{ oidc_providers }}"
+    icon_slug_attr: "app_slug"
+    icon_apps_list: "{{ refreshed_apps }}"
+
+# Group-based access control via policy bindings
+- name: Get existing policy bindings
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/policies/bindings/"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: existing_bindings
+  check_mode: false
+
+- name: Get existing expression policies
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/policies/expression/"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: existing_policies
+  check_mode: false
+
+# Cleanup orphaned policy bindings using shared task
+- name: Cleanup orphaned OIDC policies
+  ansible.builtin.include_tasks: ../../common/tasks/cleanup_policies.yml
+  vars:
+    cleanup_items: "{{ oidc_providers }}"
+    cleanup_slug_attr: "app_slug"
+    cleanup_bindings: "{{ existing_bindings }}"
+    cleanup_policies: "{{ existing_policies }}"
+
+# Create/update group access policies for providers with groups
+- name: Build provider groups requiring policies
+  ansible.builtin.set_fact:
+    providers_with_groups: "{{ oidc_providers | selectattr('groups', 'defined') | list }}"
+
+- name: Create group access policies
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/policies/expression/"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      name: "{{ item.app_slug }}-group-access"
+      expression: |
+        # Allow superusers and users in: {{ item.groups | join(', ') }}
+        if request.user.is_superuser:
+            return True
+        allowed_groups = {{ item.groups | to_json }}
+        user_groups = [g.name for g in request.user.ak_groups.all()]
+        return any(g in user_groups for g in allowed_groups)
+    status_code: [200, 201]
+  loop: "{{ providers_with_groups }}"
+  loop_control:
+    label: "{{ item.app_slug }}"
+  when:
+    - not ansible_check_mode
+    - (item.app_slug ~ '-group-access') not in (existing_policies.json.results | map(attribute='name') | list)
+  register: created_policies
+
+- name: Update existing group access policies
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/policies/expression/{{ (existing_policies.json.results | selectattr('name', 'equalto', item.app_slug ~ '-group-access') | first).pk }}/"
+    method: PATCH
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      expression: |
+        # Allow superusers and users in: {{ item.groups | join(', ') }}
+        if request.user.is_superuser:
+            return True
+        allowed_groups = {{ item.groups | to_json }}
+        user_groups = [g.name for g in request.user.ak_groups.all()]
+        return any(g in user_groups for g in allowed_groups)
+    status_code: [200]
+  loop: "{{ providers_with_groups }}"
+  loop_control:
+    label: "{{ item.app_slug }}"
+  when:
+    - not ansible_check_mode
+    - (item.app_slug ~ '-group-access') in (existing_policies.json.results | map(attribute='name') | list)
+
+- name: Refresh expression policies
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/policies/expression/"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: all_policies
+  check_mode: false
+  when: providers_with_groups | length > 0
+
+- name: Refresh bindings after cleanup
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/policies/bindings/"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: current_bindings
+  check_mode: false
+  when: providers_with_groups | length > 0
+
+# IMPORTANT: Policy bindings require policybindingmodel_ptr_id, not the app pk
+# See: commit 02659b6 for similar fix in password-policy.yml
+- name: Build app binding target lookup (policybindingmodel_ptr_id)
+  ansible.builtin.set_fact:
+    app_binding_targets: "{{ app_binding_targets | default({}) | combine({item.slug: item.policybindingmodel_ptr_id}) }}"
+  loop: "{{ refreshed_apps.json.results }}"
+  loop_control:
+    label: "{{ item.slug }}"
+  when:
+    - providers_with_groups | length > 0 or providers_with_domain is defined
+    - item.policybindingmodel_ptr_id is defined
+
+- name: Build existing binding targets
+  ansible.builtin.set_fact:
+    existing_binding_targets: "{{ current_bindings.json.results | map(attribute='target') | list }}"
+  when: providers_with_groups | length > 0
+
+# Bind policies to applications
+- name: Create policy bindings for applications
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/policies/bindings/"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      policy: "{{ (all_policies.json.results | selectattr('name', 'equalto', item.app_slug ~ '-group-access') | first).pk }}"
+      target: "{{ app_binding_targets[item.app_slug] }}"
+      order: 0
+      enabled: true
+      timeout: 30
+    status_code: [200, 201]
+  loop: "{{ providers_with_groups }}"
+  loop_control:
+    label: "{{ item.app_slug }}"
+  when:
+    - not ansible_check_mode
+    - all_policies is defined
+    - item.app_slug in (app_binding_targets | default({}))
+    - all_policies.json.results | selectattr('name', 'equalto', item.app_slug ~ '-group-access') | list | length > 0
+    - app_binding_targets[item.app_slug] not in (existing_binding_targets | default([]))
+
+# Domain restriction policies
+- name: Build providers with domain restriction
+  ansible.builtin.set_fact:
+    providers_with_domain: "{{ oidc_providers | selectattr('allowed_domain', 'defined') | list }}"
+
+- name: Create domain restriction policies
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/policies/expression/"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      name: "{{ item.app_slug }}-domain-restriction"
+      expression: |
+        # Restrict access to {{ item.allowed_domain }} domain
+        if request.user.is_superuser:
+            return True
+        return request.user.email.endswith("{{ item.allowed_domain }}")
+    status_code: [200, 201]
+  loop: "{{ providers_with_domain }}"
+  loop_control:
+    label: "{{ item.app_slug }}"
+  when:
+    - not ansible_check_mode
+    - (item.app_slug ~ '-domain-restriction') not in (existing_policies.json.results | map(attribute='name') | list)
+
+- name: Refresh policies after domain creation
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/policies/expression/"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: all_policies_with_domain
+  check_mode: false
+  when: providers_with_domain | length > 0
+
+- name: Refresh bindings for domain restrictions
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/policies/bindings/"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: domain_bindings
+  check_mode: false
+  when: providers_with_domain | length > 0
+
+- name: Build domain binding targets
+  ansible.builtin.set_fact:
+    domain_binding_targets: "{{ domain_bindings.json.results | map(attribute='target') | list }}"
+  when: providers_with_domain | length > 0
+
+- name: Create policy bindings for domain restrictions
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/policies/bindings/"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      policy: "{{ (all_policies_with_domain.json.results | selectattr('name', 'equalto', item.app_slug ~ '-domain-restriction') | first).pk }}"
+      target: "{{ app_binding_targets[item.app_slug] }}"
+      order: 0
+      enabled: true
+      timeout: 30
+    status_code: [200, 201]
+  loop: "{{ providers_with_domain }}"
+  loop_control:
+    label: "{{ item.app_slug }}"
+  when:
+    - not ansible_check_mode
+    - all_policies_with_domain is defined
+    - item.app_slug in (app_binding_targets | default({}))
+    - all_policies_with_domain.json.results | selectattr('name', 'equalto', item.app_slug ~ '-domain-restriction') | list | length > 0
+    - app_binding_targets[item.app_slug] not in (domain_binding_targets | default([]))
+
+- name: Display OIDC providers configured
+  ansible.builtin.debug:
+    msg: "OIDC providers: {{ all_providers.json.results | map(attribute='name') | list | join(', ') }}"
+
+# Store new credentials to encrypted file (CI/CD safe - no log exposure)
+- name: Check for newly created providers
+  ansible.builtin.set_fact:
+    has_new_providers: "{{ created_providers.results | default([]) | selectattr('changed', 'defined') | selectattr('changed') | list | length > 0 }}"
+  when: not ansible_check_mode
+
+- name: Write new credentials to file
+  ansible.builtin.copy:
+    content: |
+      # OIDC Credentials - Generated {{ lookup('pipe', 'date -Iseconds') }}
+      # Encrypt with: ansible-vault encrypt vars/oidc-credentials.yml
+      ---
+      {% for item in created_providers.results if item.changed | default(false) %}
+      {{ item.json.name }}:
+        client_id: "{{ item.json.client_id }}"
+      {% if item.json.client_type == 'confidential' %}
+        client_secret: "{{ item.json.client_secret }}"
+      {% else %}
+        # Public client (PKCE) - no client secret
+      {% endif %}
+        issuer_url: "{{ authentik_url }}/application/o/{{ item.json.name | regex_replace('-oidc$', '') }}/"
+      {% endfor %}
+    dest: "{{ playbook_dir }}/../vars/oidc-credentials.yml"
+    mode: "0600"
+  when:
+    - not ansible_check_mode
+    - has_new_providers | default(false)
+  no_log: true
+
+- name: Notify about new credentials file
+  ansible.builtin.pause:
+    seconds: 0
+    prompt: |
+
+      NEW OIDC credentials written to: vars/oidc-credentials.yml
+
+      To encrypt: ansible-vault encrypt vars/oidc-credentials.yml
+      To view:    ansible-vault view vars/oidc-credentials.yml
+  when:
+    - not ansible_check_mode
+    - has_new_providers | default(false)

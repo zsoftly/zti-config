@@ -1,0 +1,25 @@
+---
+# Headscale Backup Playbook
+# Runs a manual backup
+#
+# Usage:
+#   ansible-playbook playbooks/headscale-backup.yml
+
+- name: Backup Headscale
+  hosts: all
+  become: true
+  gather_facts: true
+
+  vars_files:
+    - ../vars/headscale.yml
+
+  tasks:
+    - name: Run backup script
+      ansible.builtin.command:
+        cmd: /opt/headscale/backup.sh
+      register: backup_result
+      changed_when: "'OK' in backup_result.stdout"
+
+    - name: Display backup result
+      ansible.builtin.debug:
+        var: backup_result.stdout_lines

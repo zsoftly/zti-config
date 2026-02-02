@@ -1,0 +1,30 @@
+---
+# Wazuh Agent Defaults
+# Minimal configuration - policies managed by Wazuh Manager
+
+# Manager connection
+wazuh_manager_address: "wazuh.example.com"
+wazuh_manager_port: 1514
+wazuh_manager_protocol: "tcp"
+wazuh_manager_enrollment_port: 1515
+
+# Agent identity
+wazuh_agent_name: "{{ inventory_hostname }}"
+wazuh_agent_group: ""  # Agent group(s) - comma-separated for multiple (e.g., "vpn", "lab", "endpoint")
+
+# Package management
+# - "present": Install if missing, don't touch if already installed (allows UI upgrades)
+# - "latest": Always upgrade to latest version
+wazuh_agent_package_state: "present"
+
+# Enrollment (optional - agent auto-enrolls without password by default)
+wazuh_authd_password: ""
+
+# Service
+wazuh_agent_service_state: "started"
+wazuh_agent_service_enabled: true
+
+# Remote commands
+# Allow Wazuh manager to run commands on this agent
+# Default: false (disabled for security)
+wazuh_remote_commands_enabled: false

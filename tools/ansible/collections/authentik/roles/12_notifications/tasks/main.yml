@@ -1,0 +1,501 @@
+# Configure Authentik Notification Rules with Event Matcher Policies
+# Notification rules require policies to define which events trigger them
+# Supports: --check --diff for dry runs
+---
+
+# ============================================================================
+# FETCH EXISTING RESOURCES
+# ============================================================================
+
+- name: Get existing notification rules
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/events/rules/?page_size=500"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: existing_rules
+  check_mode: false
+
+- name: Get existing event matcher policies
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/policies/event_matcher/?page_size=500"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: existing_event_policies
+  check_mode: false
+
+# ============================================================================
+# CREATE/UPDATE CUSTOM TRANSPORTS (Slack, etc.)
+# ============================================================================
+
+- name: Get existing transports for creation check
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/events/transports/"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: existing_transports_check
+  check_mode: false
+  when: notification_transports is defined
+
+- name: Build existing transport names
+  ansible.builtin.set_fact:
+    existing_transport_names: "{{ existing_transports_check.json.results | map(attribute='name') | list }}"
+  when: notification_transports is defined
+
+# --------------------------------------------------------------------------
+# Webhook transports (Slack, Google Chat, etc.)
+# --------------------------------------------------------------------------
+- name: Create webhook notification transports
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/events/transports/"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      name: "{{ item.name }}"
+      mode: "{{ item.mode }}"
+      webhook_url: "{{ lookup('vars', item.webhook_url_var) }}"
+      send_once: "{{ item.send_once | default(true) }}"
+    status_code: [200, 201]
+  loop: "{{ notification_transports | default([]) }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when:
+    - not ansible_check_mode
+    - notification_transports is defined
+    - item.webhook_url_var is defined
+    - lookup('vars', item.webhook_url_var, default='') | length > 0
+    - item.name not in (existing_transport_names | default([]))
+  register: created_webhook_transports
+
+- name: Update existing webhook transports
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/events/transports/{{ (existing_transports_check.json.results | selectattr('name', 'equalto', item.name) | first).pk }}/"
+    method: PATCH
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      mode: "{{ item.mode }}"
+      webhook_url: "{{ lookup('vars', item.webhook_url_var) }}"
+      send_once: "{{ item.send_once | default(true) }}"
+    status_code: [200]
+  loop: "{{ notification_transports | default([]) }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when:
+    - not ansible_check_mode
+    - notification_transports is defined
+    - item.webhook_url_var is defined
+    - lookup('vars', item.webhook_url_var, default='') | length > 0
+    - item.name in (existing_transport_names | default([]))
+
+- name: Warn if webhook URL not configured
+  ansible.builtin.debug:
+    msg: "Webhook not configured for {{ item.name }}. Add {{ item.webhook_url_var }} to vault.yml"
+  loop: "{{ notification_transports | default([]) }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when:
+    - notification_transports is defined
+    - item.webhook_url_var is defined
+    - lookup('vars', item.webhook_url_var, default='') | length == 0
+
+# --------------------------------------------------------------------------
+# Email transports (custom template with sanitized content)
+# --------------------------------------------------------------------------
+- name: Show email transports that would be created (check mode)
+  ansible.builtin.debug:
+    msg: "Would create email transport: {{ item.name }} (template: {{ item.email_template | default('default') }})"
+  loop: "{{ notification_transports | default([]) }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when:
+    - ansible_check_mode
+    - notification_transports is defined
+    - item.mode == 'email'
+    - item.name not in (existing_transport_names | default([]))
+
+- name: Create custom email notification transports
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/events/transports/"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body: >-
+      {{
+        {
+          'name': item.name,
+          'mode': item.mode,
+          'send_once': item.send_once | default(true)
+        }
+        | combine({'email_subject_prefix': item.email_subject_prefix} if item.email_subject_prefix is defined else {})
+        | combine({'email_template': item.email_template} if item.email_template is defined else {})
+      }}
+    status_code: [200, 201]
+  loop: "{{ notification_transports | default([]) }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when:
+    - not ansible_check_mode
+    - notification_transports is defined
+    - item.mode == 'email'
+    - item.name not in (existing_transport_names | default([]))
+  register: created_email_transports
+
+- name: Update existing email transports
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/events/transports/{{ (existing_transports_check.json.results | selectattr('name', 'equalto', item.name) | first).pk }}/"
+    method: PATCH
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body: >-
+      {{
+        {
+          'mode': item.mode,
+          'send_once': item.send_once | default(true)
+        }
+        | combine({'email_subject_prefix': item.email_subject_prefix} if item.email_subject_prefix is defined else {})
+        | combine({'email_template': item.email_template} if item.email_template is defined else {})
+      }}
+    status_code: [200]
+  loop: "{{ notification_transports | default([]) }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when:
+    - not ansible_check_mode
+    - notification_transports is defined
+    - item.mode == 'email'
+    - item.name in (existing_transport_names | default([]))
+
+# ============================================================================
+# FETCH TRANSPORTS (after custom ones created)
+# ============================================================================
+
+- name: Get notification transports
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/events/transports/"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: transports
+  check_mode: false
+
+- name: Get notification recipients group
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/core/groups/?name=notification-recipients"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: notification_group
+  check_mode: false
+
+# ============================================================================
+# BUILD LOOKUP MAPS
+# ============================================================================
+
+- name: Build transport lookup
+  ansible.builtin.set_fact:
+    transport_map: "{{ transport_map | default({}) | combine({item.name: item.pk}) }}"
+  loop: "{{ transports.json.results }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Build existing rules lookup
+  ansible.builtin.set_fact:
+    existing_rules_map: "{{ existing_rules_map | default({}) | combine({item.name: item.pk}) }}"
+  loop: "{{ existing_rules.json.results }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Build existing event policies lookup
+  ansible.builtin.set_fact:
+    existing_policies_map: "{{ existing_policies_map | default({}) | combine({item.name: item.pk}) }}"
+  loop: "{{ existing_event_policies.json.results }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Debug lookups
+  ansible.builtin.debug:
+    msg:
+      - "Notification group: {{ notification_group.json.results[0].pk | default('NOT FOUND') }}"
+      - "Rules: {{ existing_rules_map.keys() | list | length }}"
+      - "Policies: {{ existing_policies_map.keys() | list | length }}"
+      - "Transports: {{ transport_map.keys() | list }}"
+  tags: [debug, never]
+
+# ============================================================================
+# CREATE/UPDATE EVENT MATCHER POLICIES
+# ============================================================================
+
+- name: Show event matcher policies that would be created (check mode)
+  ansible.builtin.debug:
+    msg: "Would create event matcher policy: {{ item.name }}-policy (action: {{ item.event_match.action | default('all') }})"
+  loop: "{{ notification_rules }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when:
+    - ansible_check_mode
+    - (item.name + '-policy') not in (existing_policies_map | default({}))
+    - item.event_match is defined
+
+- name: Create event matcher policies
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/policies/event_matcher/"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body: >-
+      {{
+        {
+          'name': item.name + '-policy',
+          'execution_logging': true
+        }
+        | combine({'action': item.event_match.action} if item.event_match.action is defined else {})
+        | combine({'app': item.event_match.app} if item.event_match.app is defined else {})
+        | combine({'model': item.event_match.model_name} if item.event_match.model_name is defined else {})
+      }}
+    status_code: [200, 201]
+  loop: "{{ notification_rules }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when:
+    - not ansible_check_mode
+    - item.event_match is defined
+    - (item.name + '-policy') not in (existing_policies_map | default({}))
+  register: created_policies
+
+- name: Update existing event matcher policies
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/policies/event_matcher/{{ existing_policies_map[item.name + '-policy'] }}/"
+    method: PATCH
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body: >-
+      {{
+        {'execution_logging': true}
+        | combine({'action': item.event_match.action} if item.event_match.action is defined else {})
+        | combine({'app': item.event_match.app} if item.event_match.app is defined else {})
+        | combine({'model': item.event_match.model_name} if item.event_match.model_name is defined else {})
+      }}
+    status_code: [200]
+  loop: "{{ notification_rules }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when:
+    - not ansible_check_mode
+    - item.event_match is defined
+    - (item.name + '-policy') in (existing_policies_map | default({}))
+  register: updated_policies
+
+# Refresh policies list after creation
+- name: Refresh event matcher policies list
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/policies/event_matcher/?page_size=500"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: refreshed_event_policies
+  check_mode: false
+  when: not ansible_check_mode
+
+- name: Update event policies lookup after creation
+  ansible.builtin.set_fact:
+    existing_policies_map: "{{ refreshed_event_policies.json.results | items2dict(key_name='name', value_name='pk') }}"
+  when:
+    - not ansible_check_mode
+    - refreshed_event_policies.json is defined
+
+# ============================================================================
+# CREATE/UPDATE NOTIFICATION RULES (with policy bindings)
+# ============================================================================
+
+- name: Show rules that would be created (check mode)
+  ansible.builtin.debug:
+    msg: "Would create notification rule: {{ item.name }} (severity: {{ item.severity }})"
+  loop: "{{ notification_rules }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when:
+    - ansible_check_mode
+    - item.name not in (existing_rules_map | default({}))
+
+- name: Create notification rules
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/events/rules/"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      name: "{{ item.name }}"
+      severity: "{{ item.severity }}"
+      destination_group: "{{ notification_group.json.results[0].pk }}"
+      transports: "{{ item.transports | map('extract', transport_map) | list }}"
+    status_code: [200, 201]
+  loop: "{{ notification_rules }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when:
+    - not ansible_check_mode
+    - notification_group.json.results | length > 0
+    - item.name not in (existing_rules_map | default({}))
+  register: created_rules
+
+- name: Update existing notification rules
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/events/rules/{{ existing_rules_map[item.name] }}/"
+    method: PATCH
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      severity: "{{ item.severity }}"
+      destination_group: "{{ notification_group.json.results[0].pk }}"
+      transports: "{{ item.transports | map('extract', transport_map) | list }}"
+    status_code: [200]
+  loop: "{{ notification_rules }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when:
+    - not ansible_check_mode
+    - notification_group.json.results | length > 0
+    - item.name in (existing_rules_map | default({}))
+  register: updated_rules
+
+# Refresh rules list after creation
+- name: Refresh notification rules list
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/events/rules/?page_size=500"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: refreshed_rules
+  check_mode: false
+  when: not ansible_check_mode
+
+- name: Update rules lookup after creation
+  ansible.builtin.set_fact:
+    existing_rules_map: "{{ refreshed_rules.json.results | items2dict(key_name='name', value_name='pk') }}"
+  when:
+    - not ansible_check_mode
+    - refreshed_rules.json is defined
+
+# ============================================================================
+# BIND POLICIES TO RULES
+# ============================================================================
+# IMPORTANT: Policy bindings require policybindingmodel_ptr_id, not the rule pk
+# See: commit 02659b6 for similar fix in password-policy.yml
+
+# Build rule binding target lookup (policybindingmodel_ptr_id)
+- name: Build rule binding target lookup
+  ansible.builtin.set_fact:
+    rule_binding_targets: "{{ rule_binding_targets | default({}) | combine({item.name: item.policybindingmodel_ptr_id}) }}"
+  loop: "{{ refreshed_rules.json.results | default(existing_rules.json.results) }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when:
+    - not ansible_check_mode
+    - item.policybindingmodel_ptr_id is defined
+
+- name: Get existing policy bindings for each rule
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/policies/bindings/?target={{ rule_binding_targets[item.name] }}"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  loop: "{{ notification_rules }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: rule_bindings
+  check_mode: false
+  when:
+    - not ansible_check_mode
+    - item.name in (rule_binding_targets | default({}))
+    - item.event_match is defined
+
+- name: Build rule bindings map
+  ansible.builtin.set_fact:
+    rule_has_policy: >-
+      {{
+        rule_has_policy | default({}) | combine({
+          item.item.name: (item.json.results | map(attribute='policy') | list)
+        })
+      }}
+  loop: "{{ rule_bindings.results }}"
+  loop_control:
+    label: "{{ item.item.name | default('skipped') }}"
+  when:
+    - not ansible_check_mode
+    - item.json is defined
+
+- name: Show policy bindings that would be created (check mode)
+  ansible.builtin.debug:
+    msg: "Would bind policy {{ item.name }}-policy to rule {{ item.name }}"
+  loop: "{{ notification_rules }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when:
+    - ansible_check_mode
+    - item.event_match is defined
+
+- name: Create policy bindings for notification rules
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/policies/bindings/"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      policy: "{{ existing_policies_map[item.name + '-policy'] }}"
+      target: "{{ rule_binding_targets[item.name] }}"
+      order: 0
+      enabled: true
+      timeout: 30
+    status_code: [200, 201]
+  loop: "{{ notification_rules }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when:
+    - not ansible_check_mode
+    - item.event_match is defined
+    - item.name in (rule_binding_targets | default({}))
+    - (item.name + '-policy') in existing_policies_map
+    - existing_policies_map[item.name + '-policy'] not in (rule_has_policy[item.name] | default([]))
+  register: created_bindings
+
+# ============================================================================
+# SUMMARY
+# ============================================================================
+
+- name: Notification configuration complete
+  ansible.builtin.debug:
+    msg:
+      - "Rules: {{ notification_rules | length }}"
+      - "Policies: {{ existing_policies_map.keys() | list | length }}"
+      - "Transports: {{ transport_map.keys() | list | join(', ') }}"
+  when: notification_group.json.results | length > 0

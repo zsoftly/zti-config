@@ -1,0 +1,78 @@
+---
+- name: Configure Authentik
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars_files:
+    - ../vars/authentik.yml
+    - ../vars/groups.yml
+    - ../vars/users.yml
+    - ../vars/oidc-providers.yml
+    - ../vars/google-oauth.yml
+    - ../vars/security-policies.yml
+    - ../vars/vault.yml
+
+  vars:
+    authentik_token: "{{ vault_authentik_token }}"
+
+  pre_tasks:
+    - name: Validate token retrieved
+      ansible.builtin.assert:
+        that: authentik_token | trim | length > 0
+        fail_msg: "Failed to retrieve token from vault"
+      tags: always
+
+    - name: Test API connectivity
+      ansible.builtin.uri:
+        url: "{{ authentik_url }}{{ authentik_api_path }}/core/users/me/"
+        method: GET
+        headers:
+          Authorization: "Bearer {{ authentik_token | trim }}"
+        status_code: 200
+      register: api_test
+      tags: always
+
+    - name: Display connection status
+      ansible.builtin.debug:
+        msg: "Connected to {{ authentik_url }} as {{ api_test.json.user.username }}"
+      tags: always
+
+  tasks:
+    - name: Configure groups
+      ansible.builtin.include_tasks: ../tasks/groups.yml
+      tags: [groups]
+
+    - name: Configure users and service accounts
+      ansible.builtin.include_tasks: ../tasks/users.yml
+      tags: [users]
+
+    - name: Configure LDAP provider
+      ansible.builtin.include_tasks: ../tasks/ldap-provider.yml
+      tags: [ldap]
+
+    - name: Configure OIDC providers
+      ansible.builtin.include_tasks: ../tasks/oidc-providers.yml
+      tags: [oidc]
+
+    - name: Configure Google OAuth source
+      ansible.builtin.include_tasks: ../tasks/google-oauth-source.yml
+      tags: [google]
+      when: google_oauth_client_id != "REPLACE_WITH_GOOGLE_CLIENT_ID"
+
+    # Security Policies
+    - name: Configure password policy
+      ansible.builtin.include_tasks: ../tasks/password-policy.yml
+      tags: [security, password]
+
+    - name: Configure MFA stages
+      ansible.builtin.include_tasks: ../tasks/mfa-stages.yml
+      tags: [security, mfa]
+
+    - name: Configure reputation policy
+      ansible.builtin.include_tasks: ../tasks/reputation-policy.yml
+      tags: [security, reputation]
+
+    - name: Configure session settings
+      ansible.builtin.include_tasks: ../tasks/session-config.yml
+      tags: [security, session]

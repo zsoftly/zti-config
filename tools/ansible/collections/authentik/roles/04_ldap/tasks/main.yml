@@ -1,0 +1,901 @@
+# Create LDAP Provider and Outpost
+# Supports: --check --diff for dry runs
+---
+- name: Validate required variables are defined
+  ansible.builtin.assert:
+    that:
+      - authentik_url is defined
+      - authentik_token is defined
+      - authentik_k8s_service is defined
+      - ldap_provider is defined
+      - ldap_application is defined
+      - ldap_outpost is defined
+      - ldap_service_account is defined
+    fail_msg: |
+      Required variables not defined!
+      Please check roles/04_ldap/defaults/main.yml and ensure all variables are set.
+      Required: authentik_url, authentik_token, authentik_k8s_service, ldap_provider, ldap_application, ldap_outpost, ldap_service_account
+    success_msg: "All required variables are defined"
+
+- name: Set Authentik internal host URL for outpost communication
+  ansible.builtin.set_fact:
+    authentik_internal_url: "http://{{ authentik_k8s_service.name }}.{{ authentik_k8s_service.namespace }}.svc.cluster.local:{{ authentik_k8s_service.port }}"
+
+# Create simple LDAP authentication flow (username + password only, no MFA/OAuth)
+- name: Check if LDAP authentication flow exists
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/flows/instances/?slug=ldap-authentication-flow"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: existing_ldap_flow
+  check_mode: false
+
+- name: Create LDAP authentication flow
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/flows/instances/"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      name: "LDAP Authentication Flow"
+      slug: "ldap-authentication-flow"
+      title: "LDAP Authentication"
+      designation: "authentication"
+      authentication: "none"
+      policy_engine_mode: "any"
+      compatibility_mode: false
+      layout: "stacked"
+      denied_action: "message_continue"
+    status_code: [200, 201]
+  when:
+    - not ansible_check_mode
+    - existing_ldap_flow.json.results | length == 0
+  register: ldap_flow_created
+
+- name: Get LDAP authentication flow details
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/flows/instances/?slug=ldap-authentication-flow"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: ldap_auth_flow
+  check_mode: false
+
+- name: Validate LDAP authentication flow exists
+  ansible.builtin.assert:
+    that:
+      - ldap_auth_flow.json.results | length > 0
+      - ldap_auth_flow.json.results[0].designation == "authentication"
+      - ldap_auth_flow.json.results[0].authentication == "none"
+    fail_msg: |
+      LDAP Authentication Flow validation failed!
+      - Expected: Flow 'ldap-authentication-flow' with designation='authentication' and authentication='none'
+      - Found: {{ ldap_auth_flow.json.results | length }} flows
+      Please check Customization → Flows & Stages in Authentik UI.
+    success_msg: "LDAP authentication flow validated successfully"
+
+- name: Check if identification stage exists
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/stages/identification/?name=ldap-identification-stage"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: existing_ident_stage
+  check_mode: false
+
+- name: Create identification stage for LDAP
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/stages/identification/"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      name: "ldap-identification-stage"
+      user_fields: ["username"]
+      password_stage: null
+      case_insensitive_matching: true
+      show_matched_user: true
+      enrollment_flow: null
+      recovery_flow: null
+      passwordless_flow: null
+      sources: []
+    status_code: [200, 201]
+  when:
+    - not ansible_check_mode
+    - existing_ident_stage.json.results | length == 0
+  register: ident_stage_created
+
+- name: Get identification stage details
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/stages/identification/?name=ldap-identification-stage"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: ident_stage
+  check_mode: false
+
+- name: Validate identification stage exists
+  ansible.builtin.assert:
+    that:
+      - ident_stage.json.results | length > 0
+      - '"username" in ident_stage.json.results[0].user_fields'
+    fail_msg: |
+      Identification stage validation failed!
+      - Expected: Stage 'ldap-identification-stage' with user_fields containing 'username'
+      - Found: {{ ident_stage.json.results | length }} stages
+      Please check Customization → Flows & Stages → Stages in Authentik UI.
+    success_msg: "Identification stage validated successfully"
+
+- name: Check if password stage exists
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/stages/password/?name=ldap-password-stage"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: existing_password_stage
+  check_mode: false
+
+- name: Create password validation stage for LDAP
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/stages/password/"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      name: "ldap-password-stage"
+      backends:
+        - "authentik.core.auth.InbuiltBackend"
+      configure_flow: null
+      failed_attempts_before_cancel: 5
+    status_code: [200, 201]
+  when:
+    - not ansible_check_mode
+    - existing_password_stage.json.results | length == 0
+  register: password_stage_created
+
+- name: Get password stage details
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/stages/password/?name=ldap-password-stage"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: password_stage
+  check_mode: false
+
+- name: Validate password stage exists
+  ansible.builtin.assert:
+    that:
+      - password_stage.json.results | length > 0
+      - password_stage.json.results[0].backends | length > 0
+    fail_msg: |
+      Password stage validation failed!
+      - Expected: Stage 'ldap-password-stage' with authentication backends configured
+      - Found: {{ password_stage.json.results | length }} stages
+      Please check Customization → Flows & Stages → Stages in Authentik UI.
+    success_msg: "Password stage validated successfully"
+
+- name: Get existing stage bindings for LDAP flow
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/stages/bindings/?target={{ ldap_auth_flow.json.results[0].pk }}"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: [200, 404]
+  register: existing_stage_bindings
+  check_mode: false
+  failed_when: false
+
+- name: Set fact for identification stage binding check
+  ansible.builtin.set_fact:
+    ident_stage_bound: "{{ (existing_stage_bindings.status == 200) and (existing_stage_bindings.json.results | selectattr('stage', 'equalto', ident_stage.json.results[0].pk) | list | length > 0) }}"
+
+- name: Set fact for password stage binding check
+  ansible.builtin.set_fact:
+    password_stage_bound: "{{ (existing_stage_bindings.status == 200) and (existing_stage_bindings.json.results | selectattr('stage', 'equalto', password_stage.json.results[0].pk) | list | length > 0) }}"
+
+- name: Bind identification stage to LDAP flow
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/stages/bindings/"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      stage: "{{ ident_stage.json.results[0].pk }}"
+      target: "{{ ldap_auth_flow.json.results[0].pk }}"
+      order: 10
+      evaluate_on_plan: true
+      re_evaluate_policies: false
+      enabled: true
+    status_code: [200, 201, 400]
+  when:
+    - not ansible_check_mode
+    - not ident_stage_bound
+  register: ident_binding
+  failed_when:
+    - ident_binding.status is defined
+    - ident_binding.status == 400
+    - '"already exists" not in (ident_binding.content | default("") | lower)'
+    - '"unique" not in (ident_binding.content | default("") | lower)'
+
+- name: Bind password stage to LDAP flow
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/stages/bindings/"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      stage: "{{ password_stage.json.results[0].pk }}"
+      target: "{{ ldap_auth_flow.json.results[0].pk }}"
+      order: 20
+      evaluate_on_plan: true
+      re_evaluate_policies: false
+      enabled: true
+    status_code: [200, 201, 400]
+  when:
+    - not ansible_check_mode
+    - not password_stage_bound
+  register: password_binding
+  failed_when:
+    - password_binding.status is defined
+    - password_binding.status == 400
+    - '"already exists" not in (password_binding.content | default("") | lower)'
+    - '"unique" not in (password_binding.content | default("") | lower)'
+
+- name: Get existing LDAP providers
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/providers/ldap/"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: existing_ldap_providers
+  check_mode: false
+
+- name: Get self-signed certificate
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/crypto/certificatekeypairs/?name=authentik%20Self-signed%20Certificate"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: cert
+  check_mode: false
+
+- name: Get default invalidation flow
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/flows/instances/?slug=default-invalidation-flow"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: invalidation_flow
+  check_mode: false
+
+- name: Check if LDAP provider needs creation
+  ansible.builtin.set_fact:
+    ldap_provider_exists: "{{ ldap_provider.name in (existing_ldap_providers.json.results | map(attribute='name') | list) }}"
+
+- name: Show LDAP provider that would be created (check mode)
+  ansible.builtin.debug:
+    msg: "Would create LDAP provider: {{ ldap_provider.name }}"
+  when: ansible_check_mode and not ldap_provider_exists
+
+- name: Create LDAP provider
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/providers/ldap/"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      name: "{{ ldap_provider.name }}"
+      authorization_flow: "{{ ldap_auth_flow.json.results[0].pk }}"
+      invalidation_flow: "{{ invalidation_flow.json.results[0].pk }}"
+      base_dn: "{{ ldap_provider.base_dn }}"
+      certificate: "{{ cert.json.results[0].pk | default(omit) }}"
+      search_mode: "{{ ldap_provider.search_mode }}"
+      bind_mode: "{{ ldap_provider.bind_mode }}"
+      mfa_support: "{{ ldap_provider.mfa_support }}"
+    status_code: [200, 201]
+  when:
+    - not ansible_check_mode
+    - not ldap_provider_exists
+  register: ldap_provider_result
+
+- name: Update existing LDAP provider with LDAP authentication flow
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/providers/ldap/{{ existing_ldap_providers.json.results | selectattr('name', 'equalto', ldap_provider.name) | map(attribute='pk') | first }}/"
+    method: PATCH
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      authorization_flow: "{{ ldap_auth_flow.json.results[0].pk }}"
+      bind_mode: "{{ ldap_provider.bind_mode }}"
+      search_mode: "{{ ldap_provider.search_mode }}"
+      mfa_support: "{{ ldap_provider.mfa_support }}"
+    status_code: [200]
+  when:
+    - not ansible_check_mode
+    - ldap_provider_exists
+    - ldap_auth_flow.json.results | length > 0
+  register: ldap_provider_updated
+
+- name: Re-fetch LDAP provider details for validation
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/providers/ldap/?name={{ ldap_provider.name }}"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: ldap_provider_final
+  check_mode: false
+
+- name: Validate LDAP provider configuration
+  ansible.builtin.assert:
+    that:
+      - ldap_provider_final.json.results | length > 0
+      - ldap_provider_final.json.results[0].authorization_flow == ldap_auth_flow.json.results[0].pk
+      - ldap_provider_final.json.results[0].bind_mode == ldap_provider.bind_mode
+      - ldap_provider_final.json.results[0].base_dn == ldap_provider.base_dn
+    fail_msg: |
+      LDAP Provider validation failed!
+      - Provider name: {{ ldap_provider.name }}
+      - Expected authorization_flow: {{ ldap_auth_flow.json.results[0].pk }} (LDAP Authentication Flow)
+      - Actual authorization_flow: {{ ldap_provider_final.json.results[0].authorization_flow | default('NOT SET') }}
+      - Expected bind_mode: {{ ldap_provider.bind_mode }}
+      - Actual bind_mode: {{ ldap_provider_final.json.results[0].bind_mode | default('NOT SET') }}
+      Please check Applications → Providers → example-ldap in Authentik UI.
+    success_msg: "LDAP provider validated successfully with correct authentication flow"
+
+- name: Get LDAP provider details
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/providers/ldap/?name={{ ldap_provider.name }}"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: ldap_provider_details
+  check_mode: false
+
+# Assign LDAP search permission via RBAC (Authentik 2024.8+)
+# The search_group field was replaced with RBAC permission "search_full_directory"
+- name: Get LDAP service account user for permissions
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/core/users/?username={{ ldap_service_account.username }}"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: ldap_svc_user
+  check_mode: false
+  when: ldap_service_account is defined
+
+- name: Set LDAP service account pk
+  ansible.builtin.set_fact:
+    ldap_svc_user_pk: "{{ ldap_svc_user.json.results[0].pk }}"
+  when:
+    - ldap_svc_user.json.results | default([]) | length > 0
+
+# Workaround for Authentik bug #11548: search_full_directory permission doesn't work properly
+# Even when assigned via official LDAP Provider Permissions tab, LDAP bind fails with 403
+# Solution: Add ldapservice to a superuser group (authentik Admins)
+# Internal service accounts cannot be set as superuser directly, but inherit it from group membership
+# See: https://github.com/goauthentik/authentik/issues/11548
+- name: Get superuser group for ldapservice
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/core/groups/?name={{ ldap_service_superuser_group | urlencode }}"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: ldap_superuser_group
+  check_mode: false
+
+- name: Get current ldapservice user details to check group membership
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/core/users/{{ ldap_svc_user_pk }}/"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: ldap_user_details
+  check_mode: false
+  when: ldap_svc_user_pk is defined
+
+- name: Check if ldapservice is already in superuser group
+  ansible.builtin.set_fact:
+    ldap_in_superuser_group: "{{ ldap_superuser_group.json.results[0].pk in (ldap_user_details.json.groups_obj | map(attribute='pk') | list) }}"
+  when:
+    - ldap_superuser_group.json.results | length > 0
+    - ldap_user_details.json is defined
+
+- name: Add ldapservice to superuser group (inherits superuser)
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/core/groups/{{ ldap_superuser_group.json.results[0].pk }}/add_user/"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      pk: "{{ ldap_svc_user_pk }}"
+    status_code: [200, 204]
+  when:
+    - not ansible_check_mode
+    - ldap_svc_user_pk is defined
+    - ldap_superuser_group.json.results | length > 0
+    - not (ldap_in_superuser_group | default(false))
+  register: ldap_added_to_superuser_group
+
+- name: Display LDAP service superuser status
+  ansible.builtin.debug:
+    msg: "LDAP service account superuser status (via {{ ldap_service_superuser_group }} group): {{ 'enabled' if (ldap_in_superuser_group | default(false)) or (ldap_added_to_superuser_group.changed | default(false)) else 'pending' }}"
+
+- name: Get existing applications
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/core/applications/"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: existing_apps
+  check_mode: false
+
+- name: Check if LDAP application needs creation
+  ansible.builtin.set_fact:
+    ldap_app_exists: "{{ ldap_application.slug in (existing_apps.json.results | map(attribute='slug') | list) }}"
+
+- name: Show LDAP application that would be created (check mode)
+  ansible.builtin.debug:
+    msg: "Would create LDAP application: {{ ldap_application.name }}"
+  when: ansible_check_mode and not ldap_app_exists
+
+- name: Create LDAP application
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/core/applications/"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      name: "{{ ldap_application.name }}"
+      slug: "{{ ldap_application.slug }}"
+      provider: "{{ ldap_provider_details.json.results[0].pk }}"
+    status_code: [200, 201]
+  when:
+    - not ansible_check_mode
+    - not ldap_app_exists
+  register: ldap_app
+
+# Grant service account access to LDAP application
+# Without this, the service account cannot access the application and the outpost
+# will report "No provider found for request"
+- name: Get LDAP application details for policy binding
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/core/applications/?slug={{ ldap_application.slug }}"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: ldap_app_details
+  check_mode: false
+
+- name: Check existing policy bindings for LDAP application
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/policies/bindings/?target={{ ldap_app_details.json.results[0].pk }}"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: existing_bindings
+  check_mode: false
+  when: ldap_app_details.json.results | length > 0
+
+- name: Check if allow-all policy needs creation
+  ansible.builtin.set_fact:
+    needs_policy: "{{ existing_bindings.json.results | default([]) | length == 0 }}"
+  when: existing_bindings.json is defined
+
+- name: Show policy that would be created (check mode)
+  ansible.builtin.debug:
+    msg: "Would create allow-all policy for LDAP application access"
+  when:
+    - ansible_check_mode
+    - needs_policy | default(false)
+
+- name: Create or get allow-all policy for LDAP application
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/policies/dummy/"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      name: "ldap-application-allow-all"
+      result: true
+      wait_min: 0
+      wait_max: 0
+    status_code: [200, 201, 400]
+  register: allow_policy
+  when:
+    - not ansible_check_mode
+    - needs_policy | default(false)
+  failed_when:
+    - allow_policy.status not in [200, 201, 400]
+
+- name: Get allow-all policy details
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/policies/dummy/?name=ldap-application-allow-all"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: policy_details
+  check_mode: false
+  when: needs_policy | default(false)
+
+- name: Show policy binding that would be created (check mode)
+  ansible.builtin.debug:
+    msg: "Would bind allow-all policy to LDAP application '{{ ldap_application.name }}'"
+  when:
+    - ansible_check_mode
+    - needs_policy | default(false)
+    - policy_details.json.results | default([]) | length > 0
+
+- name: Bind allow-all policy to LDAP application
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/policies/bindings/"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      policy: "{{ policy_details.json.results[0].pk }}"
+      target: "{{ ldap_app_details.json.results[0].pk }}"
+      enabled: true
+      order: 0
+    status_code: [200, 201]
+  when:
+    - not ansible_check_mode
+    - needs_policy | default(false)
+    - policy_details.json.results | default([]) | length > 0
+  register: policy_bound
+
+- name: Display application access status
+  ansible.builtin.debug:
+    msg: "LDAP application '{{ ldap_application.name }}' access: {{ 'configured' if (policy_bound.changed | default(false)) or not (needs_policy | default(true)) else 'pending' }}"
+
+- name: Get existing outposts
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/outposts/instances/"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: existing_outposts
+  check_mode: false
+
+- name: Get local Kubernetes integration
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/outposts/service_connections/kubernetes/?name=Local%20Kubernetes%20Cluster"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: k8s_integration
+  check_mode: false
+
+- name: Check if LDAP outpost needs creation
+  ansible.builtin.set_fact:
+    ldap_outpost_exists: "{{ ldap_outpost.name in (existing_outposts.json.results | map(attribute='name') | list) }}"
+
+- name: Show LDAP outpost that would be created (check mode)
+  ansible.builtin.debug:
+    msg: "Would create LDAP outpost: {{ ldap_outpost.name }}"
+  when: ansible_check_mode and not ldap_outpost_exists
+
+- name: Create LDAP outpost
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/outposts/instances/"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      name: "{{ ldap_outpost.name }}"
+      type: "ldap"
+      service_connection: "{{ k8s_integration.json.results[0].pk }}"
+      providers:
+        - "{{ ldap_provider_details.json.results[0].pk }}"
+      config:
+        # Use internal K8s service URL for outpost communication
+        # (not authentik_url which is for external API access)
+        authentik_host: "{{ authentik_internal_url }}"
+        log_level: "{{ ldap_outpost.log_level }}"
+    status_code: [200, 201]
+  when:
+    - not ansible_check_mode
+    - not ldap_outpost_exists
+  register: ldap_outpost_result
+
+- name: Get existing LDAP outpost details (for update)
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/outposts/instances/?name={{ ldap_outpost.name }}"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: existing_ldap_outpost
+  check_mode: false
+  when: ldap_outpost_exists
+
+- name: Update LDAP outpost config if authentik_host is incorrect
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/outposts/instances/{{ existing_ldap_outpost.json.results[0].pk }}/"
+    method: PATCH
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      config:
+        authentik_host: "{{ authentik_internal_url }}"
+        log_level: "{{ ldap_outpost.log_level }}"
+    status_code: [200]
+  when:
+    - not ansible_check_mode
+    - ldap_outpost_exists
+    - existing_ldap_outpost.json.results | length > 0
+    - (existing_ldap_outpost.json.results[0].config.authentik_host | default('')) != authentik_internal_url
+  register: ldap_outpost_updated
+
+- name: Display LDAP outpost update status
+  ansible.builtin.debug:
+    msg: "LDAP outpost config updated: authentik_host={{ authentik_internal_url }}"
+  when:
+    - ldap_outpost_updated is defined
+    - ldap_outpost_updated.changed | default(false)
+
+# Grant outpost service account permission to view users (fixes 403 Forbidden)
+- name: Get LDAP outpost details for service account
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/outposts/instances/?name={{ ldap_outpost.name }}"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: ldap_outpost_details
+  check_mode: false
+
+- name: Get outpost token details to find service account user
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/core/tokens/?identifier={{ ldap_outpost_details.json.results[0].token_identifier }}"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: outpost_token_details
+  check_mode: false
+  when: ldap_outpost_details.json.results | length > 0
+
+- name: Get outpost service account details
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/core/users/{{ outpost_token_details.json.results[0].user }}/"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: outpost_service_account
+  check_mode: false
+  when:
+    - outpost_token_details.json.results is defined
+    - outpost_token_details.json.results | length > 0
+
+- name: Set outpost service account user ID and type
+  ansible.builtin.set_fact:
+    outpost_user_id: "{{ outpost_token_details.json.results[0].user }}"
+    outpost_is_internal: "{{ outpost_service_account.json.type == 'internal_service_account' }}"
+  when:
+    - outpost_token_details.json.results is defined
+    - outpost_token_details.json.results | length > 0
+    - outpost_service_account.json is defined
+
+- name: Get view_user permission UUID
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/rbac/permissions/?codename=view_user"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: view_user_permission
+  check_mode: false
+
+- name: Debug permission structure
+  ansible.builtin.debug:
+    msg: "Permission: {{ view_user_permission.json.results[0] }}"
+  when: view_user_permission.json.results | length > 0
+
+- name: Check existing RBAC role assignments for outpost user
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/rbac/permissions/users/{{ outpost_user_id }}/"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: [200, 404]
+  register: outpost_user_permissions
+  check_mode: false
+  failed_when: false
+  when: outpost_user_id is defined
+
+- name: Check if outpost already has view_user permission
+  ansible.builtin.set_fact:
+    has_view_user_permission: "{{ (outpost_user_permissions.status == 200) and (outpost_user_permissions.json.results | default([]) | selectattr('codename', 'equalto', 'view_user') | list | length > 0) }}"
+  when: outpost_user_permissions is defined
+
+- name: Set permission ID from available fields
+  ansible.builtin.set_fact:
+    permission_id: "{{ view_user_permission.json.results[0].id | default(view_user_permission.json.results[0].codename) }}"
+  when:
+    - view_user_permission.json.results | length > 0
+
+- name: Display internal service account notice
+  ansible.builtin.debug:
+    msg: "Outpost uses internal service account - permissions are managed automatically by Authentik"
+  when:
+    - outpost_is_internal | default(false)
+
+- name: Grant view_user permission to outpost service account
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/rbac/permissions/assigned_by_users/{{ outpost_user_id }}/assign/"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      permissions:
+        - "{{ permission_id }}"
+      model: "authentik_core.user"
+      object_pk: null
+    status_code: [200, 201, 204, 400]
+  when:
+    - not ansible_check_mode
+    - outpost_user_id is defined
+    - permission_id is defined
+    - not (has_view_user_permission | default(false))
+    - not (outpost_is_internal | default(false))
+  register: permission_granted
+  failed_when:
+    - permission_granted.status is defined
+    - permission_granted.status == 400
+    - '"already exists" not in (permission_granted.content | default("") | lower)'
+
+- name: Display outpost permission status
+  ansible.builtin.debug:
+    msg: "Outpost service account granted view_user permission"
+  when:
+    - permission_granted is defined
+    - permission_granted.changed | default(false)
+
+- name: Display LDAP configuration
+  ansible.builtin.debug:
+    msg: "LDAP: provider={{ ldap_provider.name }}, app={{ ldap_application.name }}, outpost={{ ldap_outpost.name }}, search_permission={{ 'assigned' if (permission_assigned.changed | default(false)) or (has_search_permission | default(false)) else 'pending' }}, view_user_role={{ 'assigned' if (user_role_assigned.changed | default(false)) or (user_has_ldap_role | default(false)) else 'pending' }}"
+
+# Set password for LDAP service account
+- name: Get LDAP service account user
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/core/users/?username={{ ldap_service_account.username }}"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: ldap_service_user
+  check_mode: false
+  when:
+    - ldap_service_account is defined
+    - vault_ldapservice_password is defined
+
+- name: Show password would be set (check mode)
+  ansible.builtin.debug:
+    msg: "Would set password for service account '{{ ldap_service_account.username }}'"
+  when:
+    - ansible_check_mode
+    - ldap_service_account is defined
+    - vault_ldapservice_password is defined
+    - ldap_service_user.json.results | default([]) | length > 0
+
+- name: Set password for LDAP service account
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/core/users/{{ ldap_service_user.json.results[0].pk }}/set_password/"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      password: "{{ vault_ldapservice_password }}"
+    status_code: [200, 204]
+  when:
+    - not ansible_check_mode
+    - ldap_service_account is defined
+    - vault_ldapservice_password is defined
+    - ldap_service_user.json.results | default([]) | length > 0
+  register: ldap_password_set
+  no_log: true
+
+- name: Display service account status
+  ansible.builtin.debug:
+    msg: "LDAP service account '{{ ldap_service_account.username }}' password configured"
+  when:
+    - ldap_password_set is defined
+    - ldap_password_set.changed | default(false)
+
+# Final validation and summary
+- name: Get final stage binding count
+  ansible.builtin.set_fact:
+    stage_count: "{{ existing_stage_bindings.json.results | length if existing_stage_bindings.status == 200 else '2 (ident + password)' }}"
+
+- name: Display LDAP configuration summary
+  ansible.builtin.debug:
+    msg:
+      - "=========================================="
+      - "LDAP Configuration Complete"
+      - "=========================================="
+      - "Flow: {{ ldap_auth_flow.json.results[0].name }} ({{ ldap_auth_flow.json.results[0].slug }})"
+      - "  - Designation: {{ ldap_auth_flow.json.results[0].designation }}"
+      - "  - Authentication: {{ ldap_auth_flow.json.results[0].authentication }}"
+      - "  - Stages: {{ stage_count }} bound"
+      - ""
+      - "Provider: {{ ldap_provider_final.json.results[0].name }}"
+      - "  - Base DN: {{ ldap_provider_final.json.results[0].base_dn }}"
+      - "  - Bind mode: {{ ldap_provider_final.json.results[0].bind_mode }}"
+      - "  - Search mode: {{ ldap_provider_final.json.results[0].search_mode }}"
+      - "  - MFA support: {{ ldap_provider_final.json.results[0].mfa_support }}"
+      - "  - Authorization flow: LDAP Authentication Flow ✓"
+      - ""
+      - "Application: {{ ldap_application.name }}"
+      - "Outpost: {{ ldap_outpost.name }}"
+      - "  - Service Account Type: {{ 'Internal' if (outpost_is_internal | default(false)) else 'Regular' }}"
+      - "Service Account: {{ ldap_service_account.username }}"
+      - "  - Member of: {{ ldap_service_superuser_group }} (inherits superuser)"
+      - "  - Superuser: enabled (workaround for bug #11548)"
+      - ""
+      - "Next Steps:"
+      - "1. Restart the LDAP outpost to apply authentication flow changes:"
+      - "   kubectl rollout restart deployment/ak-outpost-ldap-outpost -n authentik"
+      - "   kubectl rollout status deployment/ak-outpost-ldap-outpost -n authentik"
+      - ""
+      - "2. Test LDAP bind from mgmt-h-01:"
+      - "   LDAPTLS_REQCERT=never ldapwhoami -H ldaps://ldap.example.com:636 \\"
+      - "     -D 'cn={{ ldap_service_account.username }},ou=users,{{ ldap_provider.base_dn }}' -W"
+      - ""
+      - "3. Test SSSD status:"
+      - "   ssh root@mgmt-h-01 'systemctl restart sssd && sleep 5 && sssctl domain-status authentik'"
+      - ""
+      - "4. Check outpost logs for successful binds (no 403 errors):"
+      - "   kubectl logs -n authentik -l goauthentik.io/outpost-name={{ ldap_outpost.name }} --tail=20"
+      - "=========================================="

@@ -1,0 +1,500 @@
+# Configure AWS IAM Identity Center SCIM Provider
+# Syncs users and groups from Authentik to AWS IAM Identity Center
+#
+# AWS SCIM Behavior:
+# - Users: Synced automatically via SCIM
+# - Groups: ALL groups sync (non-aws groups get 501 errors - harmless)
+# - Group membership changes require force reset (Authentik limitation)
+# - Uses compatibility_mode: 'aws' for AWS-specific SCIM behavior
+#
+# Features:
+# - Automatic token change detection
+# - Auto-cleanup of stale SCIM mappings when token changes
+# - Graceful 409 conflict handling
+#
+# Supports: --check --diff for dry runs
+---
+
+# Validate SCIM credentials are configured
+- name: Check if AWS SCIM endpoint is configured
+  ansible.builtin.set_fact:
+    aws_scim_configured: "{{ (vault_aws_sso_scim_endpoint | default('') | length > 0) and (vault_aws_sso_scim_token | default('') | length > 0) }}"
+
+- name: Skip AWS SCIM if not configured
+  ansible.builtin.pause:
+    seconds: 0
+    prompt: |
+
+      AWS SCIM is not configured. To enable:
+        1. Enable automatic provisioning in AWS IAM Identity Center
+        2. Add to vault.yml:
+           - vault_aws_sso_scim_endpoint: "https://scim.<region>.amazonaws.com/<instance-id>/scim/v2"
+           - vault_aws_sso_scim_token: "<generated-token>"
+  when: not aws_scim_configured
+
+- name: End play if SCIM not configured
+  ansible.builtin.meta: end_play
+  when: not aws_scim_configured
+
+# Generate token fingerprint for change detection
+- name: Generate SCIM token fingerprint
+  ansible.builtin.set_fact:
+    scim_token_fingerprint: "{{ vault_aws_sso_scim_token | hash('sha256') | truncate(16, True, '') }}"
+
+# Test SCIM endpoint connectivity before proceeding
+- name: Test SCIM endpoint connectivity
+  ansible.builtin.uri:
+    url: "{{ vault_aws_sso_scim_endpoint }}/Users?count=1"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ vault_aws_sso_scim_token }}"
+      Content-Type: "application/scim+json"
+    status_code: [200, 401, 403]
+  register: scim_connectivity_test
+  check_mode: false
+  no_log: true
+  ignore_errors: true
+
+- name: Fail if SCIM token is invalid
+  ansible.builtin.fail:
+    msg: |
+      SCIM token is invalid or expired (HTTP {{ scim_connectivity_test.status }}).
+
+      To fix:
+      1. Go to AWS IAM Identity Center → Settings → Automatic provisioning
+      2. Click "Regenerate token" or "Generate new token"
+      3. Update vault.yml with the new token
+      4. Re-run this playbook
+
+      IMPORTANT: When you regenerate the token, you must also:
+      - Delete all users/groups in AWS IAM Identity Center (they will be recreated)
+      - Or use: ansible-playbook playbooks/configure.yml --tags aws_scim -e aws_scim_force_reset=true
+  when:
+    - scim_connectivity_test.status is defined
+    - scim_connectivity_test.status in [401, 403]
+
+- name: Display SCIM connectivity status
+  ansible.builtin.debug:
+    msg: "SCIM endpoint connectivity verified (token fingerprint: {{ scim_token_fingerprint }})"
+  when: scim_connectivity_test.status == 200
+
+# Get existing SCIM providers
+- name: Get existing SCIM providers
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/providers/scim/"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: existing_scim_providers
+  check_mode: false
+
+- name: Build existing provider names
+  ansible.builtin.set_fact:
+    existing_scim_names: "{{ existing_scim_providers.json.results | map(attribute='name') | list }}"
+
+# Check if existing provider has matching endpoint (indicates token might have changed)
+- name: Get existing AWS SCIM provider details
+  ansible.builtin.set_fact:
+    existing_aws_scim: "{{ existing_scim_providers.json.results | selectattr('name', 'equalto', aws_scim_provider.name) | first | default(none) }}"
+
+# Detect if we need a force reset (token changed or explicitly requested)
+- name: Check if force reset is needed
+  ansible.builtin.set_fact:
+    needs_scim_reset: "{{ aws_scim_force_reset | default(false) | bool }}"
+
+# Force reset workflow - delete existing provider to clear stale mappings
+- name: Force reset - Delete existing SCIM provider
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/providers/scim/{{ existing_aws_scim.pk }}/"
+    method: DELETE
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: [204, 404]
+  when:
+    - not ansible_check_mode
+    - needs_scim_reset
+    - existing_aws_scim is not none
+  register: deleted_provider
+
+- name: Force reset - Display provider deletion status
+  ansible.builtin.pause:
+    seconds: 0
+    prompt: |
+
+      SCIM provider '{{ aws_scim_provider.name }}' deleted to clear stale mappings.
+      A fresh provider will be created with the new token.
+  when:
+    - deleted_provider is defined
+    - deleted_provider is not skipped
+    - deleted_provider.status | default(0) == 204
+
+# Clean up AWS Identity Center users/groups via SCIM API (no AWS CLI needed)
+# This uses the same SCIM endpoint/token that Authentik uses for sync
+
+- name: Force reset - List users via SCIM API
+  ansible.builtin.uri:
+    url: "{{ vault_aws_sso_scim_endpoint }}/Users?count=100"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ vault_aws_sso_scim_token }}"
+      Content-Type: "application/scim+json"
+    status_code: [200]
+  register: scim_users_list
+  check_mode: false
+  when: needs_scim_reset
+  no_log: true
+
+- name: Force reset - Extract user IDs from SCIM response
+  ansible.builtin.set_fact:
+    scim_user_ids: "{{ scim_users_list.json.Resources | default([]) | map(attribute='id') | list }}"
+  when:
+    - needs_scim_reset
+    - scim_users_list is defined
+    - scim_users_list.json is defined
+
+- name: Force reset - Delete users via SCIM API
+  ansible.builtin.uri:
+    url: "{{ vault_aws_sso_scim_endpoint }}/Users/{{ item }}"
+    method: DELETE
+    headers:
+      Authorization: "Bearer {{ vault_aws_sso_scim_token }}"
+      Content-Type: "application/scim+json"
+    status_code: [204, 404]
+  loop: "{{ scim_user_ids | default([]) }}"
+  when:
+    - not ansible_check_mode
+    - needs_scim_reset
+    - scim_user_ids is defined
+    - scim_user_ids | length > 0
+  register: deleted_scim_users
+  no_log: true
+
+- name: Force reset - List groups via SCIM API
+  ansible.builtin.uri:
+    url: "{{ vault_aws_sso_scim_endpoint }}/Groups?count=100"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ vault_aws_sso_scim_token }}"
+      Content-Type: "application/scim+json"
+    status_code: [200]
+  register: scim_groups_list
+  check_mode: false
+  when: needs_scim_reset
+  no_log: true
+
+- name: Force reset - Extract group IDs from SCIM response
+  ansible.builtin.set_fact:
+    scim_group_ids: "{{ scim_groups_list.json.Resources | default([]) | map(attribute='id') | list }}"
+  when:
+    - needs_scim_reset
+    - scim_groups_list is defined
+    - scim_groups_list.json is defined
+
+- name: Force reset - Delete groups via SCIM API
+  ansible.builtin.uri:
+    url: "{{ vault_aws_sso_scim_endpoint }}/Groups/{{ item }}"
+    method: DELETE
+    headers:
+      Authorization: "Bearer {{ vault_aws_sso_scim_token }}"
+      Content-Type: "application/scim+json"
+    status_code: [204, 404]
+  loop: "{{ scim_group_ids | default([]) }}"
+  when:
+    - not ansible_check_mode
+    - needs_scim_reset
+    - scim_group_ids is defined
+    - scim_group_ids | length > 0
+  register: deleted_scim_groups
+  no_log: true
+
+- name: Force reset - Display SCIM cleanup summary
+  ansible.builtin.pause:
+    seconds: 0
+    prompt: |
+
+      AWS Identity Center cleanup completed via SCIM API:
+        Users deleted: {{ scim_user_ids | default([]) | length }}
+        Groups deleted: {{ scim_group_ids | default([]) | length }}
+  when: needs_scim_reset
+
+# Refresh provider list after potential deletion
+- name: Refresh SCIM providers after reset
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/providers/scim/"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: refreshed_scim_providers
+  check_mode: false
+  when: needs_scim_reset
+
+- name: Update provider list after reset
+  ansible.builtin.set_fact:
+    existing_scim_providers: "{{ refreshed_scim_providers }}"
+  when:
+    - needs_scim_reset
+    - refreshed_scim_providers is not skipped
+
+- name: Rebuild existing provider names after reset
+  ansible.builtin.set_fact:
+    existing_scim_names: "{{ existing_scim_providers.json.results | map(attribute='name') | list }}"
+  when: needs_scim_reset
+
+# Get SCIM property mappings (use SCIM-specific endpoint)
+- name: Get SCIM property mappings
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/propertymappings/provider/scim/?page_size=100"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: scim_mappings
+  check_mode: false
+
+# Get our custom SCIM user mapping (email as userName)
+- name: Get SCIM email mapping
+  ansible.builtin.set_fact:
+    scim_email_mapping: "{{ scim_mappings.json.results | selectattr('name', 'equalto', 'SCIM User Mapping (Email as userName)') | first | default(none) }}"
+
+- name: Fail if SCIM email mapping not found
+  ansible.builtin.fail:
+    msg: |
+      SCIM email mapping not found. Run: ansible-playbook playbooks/configure.yml --tags scim_defaults,aws_scim
+  when: scim_email_mapping is none
+
+- name: Set AWS SCIM user mappings
+  ansible.builtin.set_fact:
+    scim_user_mappings: ["{{ scim_email_mapping.pk }}"]
+
+# Use Authentik's built-in default SCIM group mapping
+# This syncs ALL groups - non-aws groups will get 501 errors from AWS but are harmless
+- name: Get default SCIM group mapping
+  ansible.builtin.set_fact:
+    default_group_mapping: "{{ scim_mappings.json.results | selectattr('name', 'equalto', 'authentik default SCIM Mapping: Group') | first | default(none) }}"
+
+- name: Set SCIM group mappings
+  ansible.builtin.set_fact:
+    scim_group_mappings: "{{ [default_group_mapping.pk] if default_group_mapping else [] }}"
+
+- name: Warn if SCIM group mapping not found
+  ansible.builtin.debug:
+    msg: "SCIM group mapping not found - groups will not be synced"
+  when: default_group_mapping is none
+
+# Get all groups
+- name: Get all Authentik groups
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/core/groups/?page_size=500"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: all_groups
+  check_mode: false
+
+# Get filter group PK if specified
+- name: Get filter group PK
+  ansible.builtin.set_fact:
+    filter_group_pk: "{{ (all_groups.json.results | selectattr('name', 'equalto', aws_scim_provider.filter_group) | first).pk }}"
+  when: aws_scim_provider.filter_group is defined and aws_scim_provider.filter_group | length > 0
+
+# Show what would be created (check mode)
+- name: Show SCIM provider that would be created (check mode)
+  ansible.builtin.pause:
+    seconds: 0
+    prompt: |
+
+      Would create AWS SCIM provider:
+        Name: {{ aws_scim_provider.name }}
+        URL: {{ aws_scim_provider.url }}
+        Filter group: {{ aws_scim_provider.filter_group | default('None') }}
+  when:
+    - ansible_check_mode
+    - aws_scim_provider.name not in existing_scim_names
+
+# Create SCIM provider
+- name: Create AWS SCIM provider
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/providers/scim/"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body: >-
+      {{
+        {
+          'name': aws_scim_provider.name,
+          'url': aws_scim_provider.url,
+          'token': vault_aws_sso_scim_token,
+          'property_mappings': scim_user_mappings,
+          'property_mappings_group': scim_group_mappings,
+          'exclude_users_service_account': true,
+          'compatibility_mode': 'aws'
+        } | combine(
+          {'filter_group': filter_group_pk} if filter_group_pk is defined else {}
+        )
+      }}
+    status_code: [200, 201]
+  when:
+    - not ansible_check_mode
+    - aws_scim_provider.name not in existing_scim_names
+  register: created_scim_provider
+  no_log: true
+
+# Update existing SCIM provider
+- name: Get existing provider PK
+  ansible.builtin.set_fact:
+    existing_provider_pk: "{{ (existing_scim_providers.json.results | selectattr('name', 'equalto', aws_scim_provider.name) | first).pk }}"
+  when: aws_scim_provider.name in existing_scim_names
+
+# Refresh provider list and update with correct mappings
+- name: Refresh SCIM providers list
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/providers/scim/"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: current_scim_providers
+  check_mode: false
+
+- name: Get AWS SCIM provider PK
+  ansible.builtin.set_fact:
+    aws_scim_pk: "{{ (current_scim_providers.json.results | selectattr('name', 'equalto', aws_scim_provider.name) | first).pk }}"
+
+- name: Update AWS SCIM provider with mappings
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/providers/scim/{{ aws_scim_pk }}/"
+    method: PATCH
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      url: "{{ aws_scim_provider.url }}"
+      token: "{{ vault_aws_sso_scim_token }}"
+      property_mappings: "{{ scim_user_mappings }}"
+      property_mappings_group: "{{ scim_group_mappings }}"
+      exclude_users_service_account: true
+      filter_group: "{{ filter_group_pk | default(omit) }}"
+    status_code: [200]
+  when: not ansible_check_mode
+  register: updated_scim_provider
+  no_log: true
+
+# Get the SCIM provider PK (either newly created or existing)
+- name: Set SCIM provider PK
+  ansible.builtin.set_fact:
+    scim_provider_pk: "{{ created_scim_provider.json.pk | default(existing_provider_pk | default('')) }}"
+  when: created_scim_provider.json.pk is defined or existing_provider_pk is defined
+
+# Assign SCIM provider as backchannel provider to AWS SSO application
+- name: Get AWS SSO application
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/core/applications/?slug=aws-sso"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: aws_sso_app
+  check_mode: false
+
+- name: Check if AWS SSO application exists
+  ansible.builtin.set_fact:
+    aws_sso_app_exists: "{{ aws_sso_app.json.results | length > 0 }}"
+
+- name: Warn if AWS SSO application not found
+  ansible.builtin.debug:
+    msg: "AWS SSO application not found. Run --tags saml first to create it, then re-run --tags aws_scim"
+  when: not aws_sso_app_exists
+
+- name: Assign SCIM provider as backchannel provider
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/core/applications/{{ aws_sso_app.json.results[0].slug }}/"
+    method: PATCH
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      backchannel_providers: "{{ [scim_provider_pk | int] }}"
+    status_code: [200]
+  when:
+    - not ansible_check_mode
+    - aws_sso_app_exists
+    - scim_provider_pk is defined
+  register: backchannel_result
+
+- name: Display backchannel assignment status
+  ansible.builtin.debug:
+    msg: "SCIM provider assigned as backchannel provider to AWS SSO application"
+  when:
+    - backchannel_result is defined
+    - backchannel_result is changed or backchannel_result is succeeded
+
+# Trigger SCIM user sync by touching each user in the filter group
+# This forces Authentik to sync users and their group memberships to AWS
+# SCIM only syncs users when they are explicitly modified
+- name: Get users in filter group
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/core/users/?groups={{ filter_group_pk }}&page_size=500"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: filter_group_users
+  check_mode: false
+  when:
+    - filter_group_pk is defined
+    - scim_provider_pk is defined
+
+- name: Trigger SCIM sync for each user
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/core/users/{{ item.pk }}/"
+    method: PATCH
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      attributes: "{{ item.attributes | default({}) | combine({'_scim_sync_trigger': now(utc=true) | string}) }}"
+    status_code: [200]
+  loop: "{{ filter_group_users.json.results | default([]) | rejectattr('type', 'search', 'service_account') | list }}"
+  loop_control:
+    label: "{{ item.username }}"
+  when:
+    - not ansible_check_mode
+    - filter_group_users.json.results is defined
+    - filter_group_users.json.results | length > 0
+    - scim_provider_pk is defined
+  register: user_sync_triggers
+  changed_when: true
+
+- name: Display user sync trigger status
+  ansible.builtin.debug:
+    msg: "Triggered SCIM sync for {{ filter_group_users.json.results | default([]) | length }} users in {{ aws_scim_provider.filter_group }}"
+  when:
+    - filter_group_users.json.results is defined
+    - filter_group_users.json.results | length > 0
+
+# Display configuration summary
+- name: Display AWS SCIM configuration summary
+  ansible.builtin.pause:
+    seconds: 0
+    prompt: |
+
+      ========================================
+      AWS IAM Identity Center SCIM Provider
+      ========================================
+      Provider: {{ aws_scim_provider.name }}
+      Endpoint: {{ aws_scim_provider.url }}
+      User filter: {{ aws_scim_provider.filter_group | default('None') }}
+      Group sync: {{ 'Enabled' if default_group_mapping else 'Disabled' }}
+
+      SCIM sync triggered - users and groups should appear in AWS within 1-2 minutes.
+
+      All groups sync to AWS. Only groups with permission set assignments grant access.
+      Non-aws groups may show 501 errors in logs - these are harmless.

@@ -1,0 +1,135 @@
+# SAML Provider Configurations
+#
+# Automatically configured:
+# - signing_key: Authentik Self-signed Certificate
+# - property_mappings: Default SAML mappings (email, name, groups)
+#
+# Optional fields:
+# - icon: Local icon filename from files/icons/ (uploaded to Authentik)
+# - groups: Restrict access to specific Authentik groups
+---
+saml_providers:
+  # AWS IAM Identity Center (SSO)
+  # Provides SAML SSO for AWS Console access
+  # SCIM provisioning is handled separately by 13_aws_scim role
+  - name: aws-sso-saml
+    app_name: AWS Console
+    app_slug: aws-sso
+    icon: "aws.svg"
+    # ACS URL from AWS IAM Identity Center (replace with your values)
+    acs_url: "https://us-east-1.signin.aws.amazon.com/platform/saml/acs/YOUR-ACS-ID"
+    # Audience/Entity ID from AWS IAM Identity Center (replace with your directory ID)
+    audience: "https://us-east-1.signin.aws.amazon.com/platform/saml/d-YOUR-DIRECTORY-ID"
+    # NameID format - email for AWS
+    name_id_mapping: "goauthentik.io/providers/saml/email"
+    # Launch URL - AWS access portal (replace with your portal URL)
+    launch_url: "https://YOUR-ORG.awsapps.com/start"
+    # Restrict access to users in AWS groups
+    groups:
+      - aws-admin
+      - aws-power
+      - aws-readonly
+    # SCIM is handled by separate 13_aws_scim role (not embedded in SAML config)
+    # because AWS SCIM endpoint is different from SAML
+
+  - name: gitlab-saml
+    app_name: GitLab
+    app_slug: gitlab
+    icon: "gitlab.svg"
+    # GitLab.com group-level SAML
+    # ACS URL: https://gitlab.com/groups/<group>/-/saml/callback
+    acs_url: "https://gitlab.com/groups/example-org/-/saml/callback"
+    # Audience/Entity ID - must match GitLab's "Identifier"
+    audience: "https://gitlab.com/groups/example-org"
+    # NameID format - email for GitLab
+    name_id_mapping: "goauthentik.io/providers/saml/email"
+    # Launch URL - GitLab group
+    launch_url: "https://gitlab.com/example-org"
+    # SCIM for user provisioning (users created on first SSO login)
+    scim:
+      enabled: true
+      url: "https://gitlab.com/api/scim/v2/groups/example-org"
+      token_var: "vault_gitlab_scim_token"
+      sync_group: "gitlab-users"
+      sync_groups: false  # GitLab SCIM only supports users, not groups
+
+  # Wazuh SIEM - Security monitoring platform
+  # SAML SSO for OpenSearch Dashboards
+  - name: wazuh-saml
+    app_name: Wazuh SIEM
+    app_slug: wazuh
+    icon: "wazuh.png"
+    # ACS URL - OpenSearch Security SAML endpoint
+    acs_url: "https://wazuh.example.com/_opendistro/_security/saml/acs"
+    # Audience/Entity ID - must match Wazuh indexer sp.entity_id
+    audience: "wazuh-saml"
+    # NameID format - email for user identification
+    name_id_mapping: "goauthentik.io/providers/saml/email"
+    # Launch URL - Wazuh Dashboard
+    launch_url: "https://wazuh.example.com"
+    # Restrict access to security/admin groups
+    groups:
+      - admins
+      - aws-admin
+      - app-wazuh-admin
+      - app-wazuh-readonly
+    # Custom property mapping for Wazuh roles
+    # Maps Authentik groups to OpenSearch roles via "Roles" SAML attribute
+    custom_property_mapping:
+      name: "Wazuh Roles Mapping"
+      saml_name: "Roles"
+      expression: |
+        # Map Authentik groups to Wazuh/OpenSearch roles
+        roles = []
+        user_groups = [g.name for g in request.user.ak_groups.all()]
+
+        # Admin access
+        if any(g in user_groups for g in ["admins", "aws-admin", "app-wazuh-admin"]):
+            roles.append("wazuh-admin")
+
+        # Read-only access
+        if "app-wazuh-readonly" in user_groups:
+            roles.append("wazuh-readonly")
+
+        return roles
+
+  # Apache CloudStack - IaaS Platform
+  # SAML SSO for CloudStack management UI
+  - name: cloudstack-saml
+    app_name: CloudStack Console
+    app_slug: cloudstack
+    icon: "cloudstack.png"
+
+    # ACS URL - CloudStack SAML endpoint
+    acs_url: "https://cloudstack.example.com/client/api?command=samlSso"
+
+    # Audience/Entity ID - must match CloudStack saml2.sp.id
+    audience: "cloudstack.example.com"
+
+    # Launch URL - CloudStack UI
+    launch_url: "https://cloudstack.example.com/client/"
+
+    # Restrict access to CloudStack groups only
+    groups:
+      - cloudstack-admin
+      - cloudstack-power
+      - cloudstack-readonly
+      - cloudstack-mgt-admin
+      - cloudstack-mgt-poweraccess
+      - cloudstack-mgt-readonly
+
+    # Custom NameID mapping - use email as NameID
+    custom_nameid_mapping:
+      name: "CloudStack NameID Email"
+      expression: |
+        # Return user email as NameID
+        return request.user.email
+
+    # Custom property mapping - send email attribute for username matching
+    custom_property_mapping:
+      name: "CloudStack Email Attribute"
+      saml_name: "email"
+      expression: |
+        # CloudStack expects email attribute for user matching
+        # This must match the saml2.user.attribute configuration in CloudStack
+        return request.user.email

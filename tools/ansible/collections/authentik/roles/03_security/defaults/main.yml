@@ -1,0 +1,139 @@
+# Security Policies Configuration
+# Based on Authentik best practices and NIST SP 800-63 guidelines
+---
+
+# Password Policy Settings
+password_policy:
+  name: "example-password-policy"
+  # NIST recommends minimum 8, hardened recommends 15
+  length_min: 15
+  # Require mixed case
+  amount_uppercase: 1
+  amount_lowercase: 1
+  # Require numbers
+  amount_digits: 1
+  # Require special characters
+  amount_symbols: 1
+  # Check against haveibeenpwned.com breached password database
+  check_have_i_been_pwned: true
+  # Use zxcvbn for complexity analysis
+  check_zxcvbn: true
+  # zxcvbn minimum score (0-4, 3 recommended)
+  zxcvbn_score_threshold: 3
+  # Check password against user attributes
+  check_static_rules: true
+  # Prevent reusing last N passwords (FedRAMP compliance)
+  password_uniqueness_count: 5
+
+# Password Expiry Policy (optional - NIST says no forced rotation)
+password_expiry:
+  enabled: false
+  name: "example-password-expiry"
+  # Days until password expires
+  days: 90
+
+# Reputation Policy Settings
+reputation_policy:
+  name: "example-reputation-policy"
+  # Score threshold - users below this trigger additional verification
+  threshold: -5
+  # Check IP reputation
+  check_ip: true
+  # Check username/identifier reputation
+  check_username: true
+
+# Account Lockout Policy Settings
+# Locks user accounts after repeated failed login attempts
+lockout_policy:
+  name: "example-account-lockout"
+  # Number of failed attempts before lockout
+  max_failed_attempts: 5
+  # Lockout duration in minutes (user can retry after this period)
+  lockout_duration_minutes: 30
+  # Allow superusers to bypass lockout (for emergency admin access)
+  allow_superuser_bypass: true
+  # Policy binding order (higher = runs later, after other security policies)
+  # Set higher than reputation policy to ensure reputation checks run first
+  binding_order: 10
+  # Also check IP-based lockout for pre-authentication attempts
+  check_ip_lockout: true
+  # Max failed attempts per IP before IP-based lockout
+  ip_max_failed_attempts: 10
+
+# MFA Configuration
+mfa_config:
+  # Authenticator stages to create
+  totp_stage:
+    name: "example-totp-setup"
+    friendly_name: "Authenticator App (TOTP)"
+    digits: 6
+  webauthn_stage:
+    name: "example-webauthn-setup"
+    friendly_name: "Security Key / Passkey"
+    # Resident key requirement: discouraged, preferred, required
+    resident_key_requirement: "preferred"
+    # User verification: discouraged, preferred, required
+    user_verification: "preferred"
+  # Validation stage
+  validation_stage:
+    name: "example-mfa-validation"
+    # Device classes to allow: static, totp, webauthn, duo, sms
+    device_classes:
+      - totp
+      - webauthn
+      - static
+    # Require MFA if not authenticated within this time
+    last_auth_threshold: "hours=0"
+    # What to do if no MFA configured: skip, deny, configure
+    # Set to 'configure' to require MFA setup for password authentication
+    # The conditional MFA policy (role 16) controls when MFA is required
+    not_configured_action: "configure"
+    # Configuration stages to use when not_configured_action is 'configure'
+    # These stages will be presented to the user to set up MFA
+    configuration_stages:
+      - "example-totp-setup"
+
+# Session Configuration
+session_config:
+  # Session duration after login
+  session_duration: "hours=8"
+  # Extended session duration (stay signed in)
+  stay_signed_in_offset: "days=7"
+  # Bind session to network (terminate if IP changes)
+  network_binding: "no_binding"
+  # Bind session to GeoIP (terminate if location changes)
+  geoip_binding: "no_binding"
+
+# GeoIP Policy (requires GeoIP database)
+geoip_policy:
+  enabled: false
+  name: "example-geoip-policy"
+  # Allowed countries (ISO codes)
+  countries:
+    - CA
+    - US
+  # Check ASN
+  check_asn: false
+
+# System Settings (configured via API, not env vars)
+system_settings:
+  # Avatar configuration: gravatar, initials, none, or URL
+  avatars: "gravatar,initials"
+  # Event retention period (audit logs: logins, admin actions, etc.)
+  # Reduced to 30 days for cost optimization
+  event_retention: "days=30"
+  # Reputation score bounds
+  reputation_lower: -5
+  reputation_upper: 5
+  # Default token duration when creating tokens in UI (days=90 for security)
+  default_token_duration: "days=90"
+  # Default token length (characters)
+  default_token_length: 128
+  # Delete user events when user is deleted (false = keep audit trail)
+  gdpr_compliance: false
+  # Allow impersonation (useful for support)
+  impersonation: true
+  # Require reason when impersonating (audit trail)
+  impersonation_require_reason: true
+  # Footer links (optional)
+  footer_links: []

@@ -1,0 +1,8 @@
+---
+# Wazuh Agent Handlers
+
+- name: Restart wazuh agent
+  ansible.builtin.systemd:
+    name: wazuh-agent
+    state: restarted
+    daemon_reload: true

@@ -1,0 +1,28 @@
+---
+# Headscale Reset Playbook
+# DESTRUCTIVE: Removes all data and reinstalls
+#
+# Usage:
+#   ansible-playbook playbooks/headscale-reset.yml -e headscale_force_recreate=true
+
+- name: Reset Headscale VPN Server
+  hosts: all
+  become: true
+  gather_facts: true
+
+  vars_files:
+    - ../vars/headscale.yml
+
+  vars:
+    headscale_force_recreate: false
+
+  pre_tasks:
+    - name: Confirm reset
+      ansible.builtin.fail:
+        msg: "Set headscale_force_recreate=true to confirm destructive reset"
+      when: not (headscale_force_recreate | bool)
+
+  roles:
+    - role: headscale
+    - role: backup
+    - role: management

@@ -1,0 +1,80 @@
+---
+- name: Configure Authentik Security Policies
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars_files:
+    - ../vars/authentik.yml
+    - ../vars/security-policies.yml
+    - ../vars/vault.yml
+
+  vars:
+    authentik_token: "{{ vault_authentik_token }}"
+
+  pre_tasks:
+    - name: Validate token
+      ansible.builtin.assert:
+        that: authentik_token | length > 0
+        fail_msg: "Failed to retrieve token from vault"
+      tags: [always]
+
+    - name: Test API connectivity
+      ansible.builtin.uri:
+        url: "{{ authentik_url }}{{ authentik_api_path }}/core/users/me/"
+        method: GET
+        headers:
+          Authorization: "Bearer {{ authentik_token | trim }}"
+        status_code: 200
+      register: api_test
+      check_mode: false
+      tags: [always]
+
+    - name: Display connection status
+      ansible.builtin.debug:
+        msg: "Connected to {{ authentik_url }} as {{ api_test.json.user.username }}"
+      when: api_test.json is defined
+      tags: [always]
+
+  tasks:
+    - name: Configure password policy
+      ansible.builtin.include_tasks:
+        file: ../tasks/password-policy.yml
+        apply:
+          tags: [password]
+      tags: [password]
+
+    - name: Configure MFA stages
+      ansible.builtin.include_tasks:
+        file: ../tasks/mfa-stages.yml
+        apply:
+          tags: [mfa]
+      tags: [mfa]
+
+    - name: Configure reputation policy
+      ansible.builtin.include_tasks:
+        file: ../tasks/reputation-policy.yml
+        apply:
+          tags: [reputation]
+      tags: [reputation]
+
+    - name: Configure account lockout policy
+      ansible.builtin.include_tasks:
+        file: ../roles/03_security/tasks/lockout-policy.yml
+        apply:
+          tags: [lockout]
+      tags: [lockout]
+
+    - name: Configure session settings
+      ansible.builtin.include_tasks:
+        file: ../tasks/session-config.yml
+        apply:
+          tags: [session]
+      tags: [session]
+
+    - name: Configure system settings
+      ansible.builtin.include_tasks:
+        file: ../tasks/system-settings.yml
+        apply:
+          tags: [system]
+      tags: [system]

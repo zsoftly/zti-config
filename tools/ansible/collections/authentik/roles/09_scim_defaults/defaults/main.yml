@@ -1,0 +1,56 @@
+# Global SCIM Property Mapping Defaults
+#
+# This role creates and manages default SCIM property mappings that use
+# email as the primary identifier instead of username.
+#
+# Why email as the identifier:
+# - SAML NameID uses email for most SaaS apps (AWS, GitLab, etc.)
+# - SCIM userName should match SAML NameID for user matching
+# - Email is globally unique and understood by all systems
+# - Username formats vary (user1 vs user1@company.com)
+#
+# This prevents the common mismatch where:
+# - SAML sends NameID: user@company.com
+# - SCIM sends userName: user
+# - Target app can't match these as the same user
+#
+# Usage:
+#   ansible-playbook playbooks/configure.yml --tags scim_defaults
+#
+# Note: Run this before other SCIM providers (aws_scim, gitlab_scim, etc.)
+# to ensure the default mapping exists.
+---
+
+# Default SCIM user mapping expression
+# This makes email the standard identifier for all SCIM providers
+scim_default_user_mapping:
+  name: "SCIM User Mapping (Email as userName)"
+  description: |
+    Global default SCIM user mapping that uses email as userName.
+    This ensures SAML NameID (email) matches SCIM userName for proper
+    user matching in target applications.
+  expression: |
+    # Use email as userName for SAML/SCIM matching
+    # AWS requires non-empty givenName and familyName
+    name_parts = request.user.name.split(" ", 1) if request.user.name else ["User"]
+    first_name = name_parts[0] if name_parts else "User"
+    last_name = name_parts[1] if len(name_parts) > 1 else first_name
+
+    return {
+        "userName": request.user.email,
+        "name": {
+            "formatted": request.user.name or request.user.email,
+            "givenName": first_name,
+            "familyName": last_name,
+        },
+        "displayName": request.user.name or request.user.email,
+        "emails": [
+            {
+                "value": request.user.email,
+                "type": "work",
+                "primary": True,
+            }
+        ],
+        "active": request.user.is_active,
+        "externalId": request.user.uid,
+    }

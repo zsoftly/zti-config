@@ -1,0 +1,60 @@
+# Configure Authentik System Settings via API
+# These settings cannot be configured via environment variables
+# Supports: --check --diff for dry runs
+---
+
+- name: Get current system settings
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/admin/settings/"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    validate_certs: true
+    status_code: [200]
+  register: current_settings
+  check_mode: false
+
+- name: Show system settings that would be applied (check mode)
+  ansible.builtin.pause:
+    seconds: 0
+    prompt: |
+
+      System Settings to Apply:
+        avatars: {{ system_settings.avatars }}
+        event_retention: {{ system_settings.event_retention }}
+        reputation: {{ system_settings.reputation_lower }} to {{ system_settings.reputation_upper }}
+        token_duration: {{ system_settings.default_token_duration }}
+        token_length: {{ system_settings.default_token_length }}
+        gdpr_compliance: {{ system_settings.gdpr_compliance }}
+        impersonation: {{ system_settings.impersonation }}
+        impersonation_require_reason: {{ system_settings.impersonation_require_reason }}
+  when: ansible_check_mode
+
+- name: Update system settings
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/admin/settings/"
+    method: PATCH
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      avatars: "{{ system_settings.avatars }}"
+      event_retention: "{{ system_settings.event_retention }}"
+      reputation_lower: "{{ system_settings.reputation_lower }}"
+      reputation_upper: "{{ system_settings.reputation_upper }}"
+      default_token_duration: "{{ system_settings.default_token_duration }}"
+      default_token_length: "{{ system_settings.default_token_length }}"
+      gdpr_compliance: "{{ system_settings.gdpr_compliance }}"
+      impersonation: "{{ system_settings.impersonation }}"
+      impersonation_require_reason: "{{ system_settings.impersonation_require_reason }}"
+      footer_links: "{{ system_settings.footer_links }}"
+    validate_certs: true
+    status_code: [200]
+  when: not ansible_check_mode
+  register: update_result
+
+- name: Display system settings status
+  ansible.builtin.debug:
+    msg: "System settings updated: impersonation_require_reason={{ system_settings.impersonation_require_reason }}, gdpr={{ system_settings.gdpr_compliance }}, token_duration={{ system_settings.default_token_duration }}"

@@ -1,0 +1,4 @@
+# Authentik API Configuration
+
+authentik_url: "https://auth.example.com"
+authentik_api_path: "/api/v3"

@@ -1,0 +1,73 @@
+# Configure Session Settings
+# Controls session duration, stay signed in, and session binding
+# Supports: --check --diff for dry runs
+---
+
+- name: Get default user login stage
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/stages/user_login/?name=default-authentication-login"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: login_stages
+  check_mode: false
+
+- name: Show session config that would be applied (check mode)
+  ansible.builtin.debug:
+    msg: "Would update session config: duration={{ session_config.session_duration }}, stay_signed_in={{ session_config.stay_signed_in_offset }}"
+  when: ansible_check_mode
+
+- name: Update default login stage with session settings
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/stages/user_login/{{ login_stages.json.results[0].pk }}/"
+    method: PATCH
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      session_duration: "{{ session_config.session_duration }}"
+      stay_signed_in_offset: "{{ session_config.stay_signed_in_offset }}"
+      network_binding: "{{ session_config.network_binding }}"
+      geoip_binding: "{{ session_config.geoip_binding }}"
+      terminate_other_sessions: false
+    status_code: [200]
+  when:
+    - not ansible_check_mode
+    - login_stages.json.results | length > 0
+  register: updated_login_stage
+
+- name: Get enrollment login stage
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/stages/user_login/?name=default-enrollment-user-login"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: enrollment_login_stages
+  check_mode: false
+
+- name: Update enrollment login stage with session settings
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/stages/user_login/{{ enrollment_login_stages.json.results[0].pk }}/"
+    method: PATCH
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      session_duration: "{{ session_config.session_duration }}"
+      stay_signed_in_offset: "{{ session_config.stay_signed_in_offset }}"
+      network_binding: "{{ session_config.network_binding }}"
+      geoip_binding: "{{ session_config.geoip_binding }}"
+      terminate_other_sessions: false
+    status_code: [200]
+  when:
+    - not ansible_check_mode
+    - enrollment_login_stages.json.results | length > 0
+  register: updated_enrollment_login_stage
+
+- name: Display session configuration status
+  ansible.builtin.debug:
+    msg: "Session: duration={{ session_config.session_duration }}, stay_signed_in={{ session_config.stay_signed_in_offset }}"

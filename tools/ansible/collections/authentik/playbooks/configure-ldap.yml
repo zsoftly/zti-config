@@ -1,0 +1,21 @@
+---
+- name: Configure Authentik LDAP Provider
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars_files:
+    - ../vars/authentik.yml
+    - ../vars/vault.yml
+
+  vars:
+    authentik_token: "{{ vault_authentik_token }}"
+
+  pre_tasks:
+    - name: Validate token
+      ansible.builtin.assert:
+        that: authentik_token | length > 0
+        fail_msg: "Failed to retrieve token"
+
+  roles:
+    - role: 04_ldap

@@ -1,0 +1,148 @@
+---
+# Prerequisites role - wait for cloud-init and install base packages
+
+- name: Wait for cloud-init to complete
+  ansible.builtin.command:
+    cmd: cloud-init status
+  changed_when: false
+  check_mode: false
+  register: cloud_init_status
+  until: >
+    'done' in cloud_init_status.stdout or
+    'error' in cloud_init_status.stdout or
+    'disabled' in cloud_init_status.stdout or
+    cloud_init_status.rc != 0
+  retries: 30
+  delay: 10
+  failed_when: false
+
+- name: Warn if cloud-init had errors
+  ansible.builtin.debug:
+    msg: "WARNING: cloud-init completed with errors. Check /var/log/cloud-init.log for details."
+  when: "'error' in cloud_init_status.stdout | default('')"
+
+- name: Note if cloud-init is disabled
+  ansible.builtin.debug:
+    msg: "INFO: cloud-init is disabled on this system."
+  when: "'disabled' in cloud_init_status.stdout | default('')"
+
+- name: Update apt cache (Debian/Ubuntu)
+  ansible.builtin.apt:
+    update_cache: true
+    cache_valid_time: 3600
+  when: ansible_os_family == 'Debian'
+
+- name: Update dnf cache (RHEL/Fedora)
+  ansible.builtin.dnf:
+    update_cache: true
+  when: ansible_os_family == 'RedHat' and ansible_pkg_mgr == 'dnf'
+
+- name: Install prerequisites (Debian/Ubuntu)
+  ansible.builtin.apt:
+    name:
+      - apt-transport-https
+      - ca-certificates
+      - curl
+      - gnupg
+      - lsb-release
+      - jq
+      - iptables-persistent
+      - python3-pip
+      - unattended-upgrades
+    state: present
+  when: ansible_os_family == 'Debian'
+
+# =============================================================================
+# Package Upgrades - Security patches (no reboot, handled externally)
+# =============================================================================
+- name: Upgrade all packages (Debian/Ubuntu)
+  ansible.builtin.apt:
+    upgrade: safe
+    autoremove: true
+    autoclean: true
+  when: ansible_os_family == 'Debian'
+  tags: [upgrade, patches]
+
+- name: Upgrade all packages (RHEL/Fedora)
+  ansible.builtin.dnf:
+    name: "*"
+    state: latest
+    security: true
+  when: ansible_os_family == 'RedHat' and ansible_pkg_mgr == 'dnf'
+  tags: [upgrade, patches]
+
+- name: Check if reboot is required (Debian/Ubuntu)
+  ansible.builtin.stat:
+    path: /var/run/reboot-required
+  register: reboot_required
+  when: ansible_os_family == 'Debian'
+  tags: [upgrade, patches]
+
+- name: Check if reboot is required (RHEL)
+  ansible.builtin.command:
+    cmd: needs-restarting -r
+  register: reboot_required_rhel
+  changed_when: false
+  failed_when: false
+  when: ansible_os_family == 'RedHat'
+  tags: [upgrade, patches]
+
+- name: Notify if reboot is required
+  ansible.builtin.debug:
+    msg: "NOTICE: System reboot required to apply updates. Schedule reboot via external tool."
+  when: >
+    (reboot_required.stat.exists | default(false)) or
+    (reboot_required_rhel.rc | default(1) == 1)
+  tags: [upgrade, patches]
+
+- name: Install prerequisites (RHEL/Fedora)
+  ansible.builtin.dnf:
+    name:
+      - ca-certificates
+      - curl
+      - gnupg2
+      - jq
+      - iptables-services
+      - python3-pip
+    state: present
+  when: ansible_os_family == 'RedHat' and ansible_pkg_mgr == 'dnf'
+
+- name: Install prerequisites (RHEL/CentOS with yum)
+  ansible.builtin.yum:
+    name:
+      - ca-certificates
+      - curl
+      - gnupg2
+      - jq
+      - iptables-services
+      - python3-pip
+    state: present
+  when: ansible_os_family == 'RedHat' and ansible_pkg_mgr == 'yum'
+
+# Tailscale CLI - for testing VPN connectivity from server
+- name: Check if Tailscale is installed
+  ansible.builtin.command:
+    cmd: tailscale --version
+  register: tailscale_check
+  changed_when: false
+  failed_when: false
+
+- name: Install Tailscale CLI
+  when: tailscale_check.rc != 0
+  block:
+    - name: Download Tailscale install script
+      ansible.builtin.get_url:
+        url: https://tailscale.com/install.sh
+        dest: /tmp/tailscale-install.sh
+        mode: "0755"
+
+    - name: Run Tailscale install script
+      ansible.builtin.command:
+        cmd: /tmp/tailscale-install.sh
+      environment:
+        TAILSCALE_SKIP_SETUP: "1"
+
+    - name: Clean up install script
+      ansible.builtin.file:
+        path: /tmp/tailscale-install.sh
+        state: absent

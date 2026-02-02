@@ -1,0 +1,327 @@
+# Create Authentik Users and Assign to Groups
+# Users are matched by email when signing in with Google OAuth
+# Supports: --check --diff for dry runs
+---
+- name: Get existing users
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/core/users/?page_size=500"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: existing_users
+  check_mode: false
+
+- name: Build existing users lookup
+  ansible.builtin.set_fact:
+    existing_users_by_username: "{{ existing_users.json.results | items2dict(key_name='username', value_name='pk') }}"
+    existing_users_by_email: "{{ existing_users.json.results | selectattr('email', 'defined') | list | items2dict(key_name='email', value_name='pk') }}"
+
+- name: Get existing groups
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/core/groups/?page_size=500"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: existing_groups
+  check_mode: false
+
+- name: Build groups lookup (name to pk)
+  ansible.builtin.set_fact:
+    groups_by_name: "{{ existing_groups.json.results | items2dict(key_name='name', value_name='pk') }}"
+
+- name: Show users that would be created (check mode)
+  ansible.builtin.debug:
+    msg: "Would create user: {{ item.username }} ({{ item.email }})"
+  loop: "{{ authentik_users }}"
+  loop_control:
+    label: "{{ item.username }}"
+  when:
+    - ansible_check_mode
+    - item.username not in existing_users_by_username
+
+- name: Create users
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/core/users/"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      username: "{{ item.username }}"
+      name: "{{ item.name }}"
+      email: "{{ item.email }}"
+      is_active: true
+      type: internal
+      path: "users"
+      attributes: "{{ item.attributes | default({}) }}"
+    status_code: [200, 201]
+  loop: "{{ authentik_users }}"
+  loop_control:
+    label: "{{ item.username }}"
+  when:
+    - not ansible_check_mode
+    - item.username not in existing_users_by_username
+  register: created_users
+
+- name: Refresh users list after creation
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/core/users/?page_size=500"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: refreshed_users
+  check_mode: false
+  when: not ansible_check_mode
+
+- name: Update users lookup after creation
+  ansible.builtin.set_fact:
+    existing_users_by_username: "{{ refreshed_users.json.results | items2dict(key_name='username', value_name='pk') }}"
+  when: not ansible_check_mode
+
+- name: Show group assignments that would be made (check mode)
+  ansible.builtin.debug:
+    msg: "Would assign {{ item.0.username }} to groups: {{ item.0.groups | join(', ') }}"
+  loop: "{{ authentik_users | subelements('groups', skip_missing=True) }}"
+  loop_control:
+    label: "{{ item.0.username }} -> {{ item.1 }}"
+  when:
+    - ansible_check_mode
+    - item.1 in groups_by_name
+
+- name: Get current group membership for each user
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/core/users/{{ existing_users_by_username[item.username] }}/"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  loop: "{{ authentik_users }}"
+  loop_control:
+    label: "{{ item.username }}"
+  register: user_details
+  check_mode: false
+  when:
+    - not ansible_check_mode
+    - item.username in existing_users_by_username
+
+- name: Build user groups map
+  ansible.builtin.set_fact:
+    user_current_groups: "{{ user_current_groups | default({}) | combine({item.item.username: item.json.groups}) }}"
+  loop: "{{ user_details.results }}"
+  loop_control:
+    label: "{{ item.item.username | default('skipped') }}"
+  when:
+    - not ansible_check_mode
+    - item.json is defined
+
+- name: Update user group memberships
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/core/users/{{ existing_users_by_username[item.username] }}/"
+    method: PATCH
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      groups: "{{ item.groups | select('in', groups_by_name.keys()) | map('extract', groups_by_name) | list }}"
+    status_code: [200]
+  loop: "{{ authentik_users }}"
+  loop_control:
+    label: "{{ item.username }}"
+  when:
+    - not ansible_check_mode
+    - item.username in existing_users_by_username
+    - item.groups is defined
+  register: updated_memberships
+
+- name: Update user attributes (SSH keys, etc.)
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/core/users/{{ existing_users_by_username[item.username] }}/"
+    method: PATCH
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      attributes: "{{ item.attributes }}"
+    status_code: [200]
+  loop: "{{ authentik_users }}"
+  loop_control:
+    label: "{{ item.username }}"
+  when:
+    - not ansible_check_mode
+    - item.username in existing_users_by_username
+    - item.attributes is defined
+  register: updated_attributes
+
+- name: Display users configured
+  ansible.builtin.debug:
+    msg: "Users configured: {{ authentik_users | map(attribute='username') | join(', ') }}"
+
+# Service Accounts (for notifications, automation, etc.)
+- name: Create service accounts
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/core/users/"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      username: "{{ item.username }}"
+      name: "{{ item.name }}"
+      email: "{{ item.email }}"
+      is_active: true
+      type: service_account
+      path: "service-accounts"
+    status_code: [200, 201]
+  loop: "{{ service_accounts | default([]) }}"
+  loop_control:
+    label: "{{ item.username }}"
+  when:
+    - not ansible_check_mode
+    - service_accounts is defined
+    - item.username not in existing_users_by_username
+  register: created_service_accounts
+
+- name: Refresh users list after service account creation
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/core/users/?page_size=500"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: refreshed_users_svc
+  check_mode: false
+  when:
+    - not ansible_check_mode
+    - created_service_accounts.changed | default(false)
+
+- name: Update users lookup after service account creation
+  ansible.builtin.set_fact:
+    existing_users_by_username: "{{ refreshed_users_svc.json.results | items2dict(key_name='username', value_name='pk') }}"
+  when:
+    - not ansible_check_mode
+    - refreshed_users_svc.json is defined
+
+- name: Update service account group memberships
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/core/users/{{ existing_users_by_username[item.username] }}/"
+    method: PATCH
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      groups: "{{ item.groups | select('in', groups_by_name.keys()) | map('extract', groups_by_name) | list }}"
+    status_code: [200]
+  loop: "{{ service_accounts | default([]) }}"
+  loop_control:
+    label: "{{ item.username }}"
+  when:
+    - not ansible_check_mode
+    - service_accounts is defined
+    - item.username in existing_users_by_username
+    - item.groups is defined
+
+- name: Display service accounts configured
+  ansible.builtin.debug:
+    msg: "Service accounts configured: {{ service_accounts | default([]) | map(attribute='username') | join(', ') | default('none') }}"
+  when: service_accounts is defined and service_accounts | length > 0
+
+# LDAP Bind Users (must be internal users per Authentik docs, not service_accounts)
+- name: Create LDAP bind users as internal type
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/core/users/"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      username: "{{ item.username }}"
+      name: "{{ item.name }}"
+      email: "{{ item.email }}"
+      is_active: true
+      type: internal
+      path: "users"
+    status_code: [200, 201]
+  loop: "{{ ldap_bind_users | default([]) }}"
+  loop_control:
+    label: "{{ item.username }}"
+  when:
+    - not ansible_check_mode
+    - ldap_bind_users is defined
+    - item.username not in existing_users_by_username
+  register: created_ldap_users
+
+- name: Update existing LDAP bind user to internal type if needed
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/core/users/{{ existing_users_by_username[item.username] }}/"
+    method: PATCH
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      type: internal
+      path: "users"
+    status_code: [200]
+  loop: "{{ ldap_bind_users | default([]) }}"
+  loop_control:
+    label: "{{ item.username }}"
+  when:
+    - not ansible_check_mode
+    - ldap_bind_users is defined
+    - item.username in existing_users_by_username
+  register: updated_ldap_users
+
+- name: Refresh users list after LDAP user creation/update
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/core/users/?page_size=500"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: refreshed_users_ldap
+  check_mode: false
+  when:
+    - not ansible_check_mode
+    - (created_ldap_users.changed | default(false)) or (updated_ldap_users.changed | default(false))
+
+- name: Update users lookup after LDAP user changes
+  ansible.builtin.set_fact:
+    existing_users_by_username: "{{ refreshed_users_ldap.json.results | items2dict(key_name='username', value_name='pk') }}"
+  when:
+    - not ansible_check_mode
+    - refreshed_users_ldap.json is defined
+
+- name: Update LDAP bind user group memberships
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/core/users/{{ existing_users_by_username[item.username] }}/"
+    method: PATCH
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      groups: "{{ item.groups | map('extract', groups_by_name) | list }}"
+    status_code: [200]
+  loop: "{{ ldap_bind_users | default([]) }}"
+  loop_control:
+    label: "{{ item.username }}"
+  when:
+    - not ansible_check_mode
+    - ldap_bind_users is defined
+    - item.username in existing_users_by_username
+    - item.groups is defined
+  register: ldap_user_groups_updated
+
+- name: Display LDAP bind users configured
+  ansible.builtin.debug:
+    msg: "LDAP bind users configured as type 'internal': {{ ldap_bind_users | default([]) | map(attribute='username') | join(', ') | default('none') }}"
+  when: ldap_bind_users is defined and ldap_bind_users | length > 0

@@ -1,0 +1,272 @@
+# Configure Account Lockout Policy
+# Locks accounts after repeated failed login attempts
+# Supports: --check --diff for dry runs
+---
+
+- name: Get existing expression policies
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/policies/expression/"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: existing_expression_policies
+  check_mode: false
+
+- name: Find existing lockout policy
+  ansible.builtin.set_fact:
+    existing_lockout_policy: "{{ existing_expression_policies.json.results | selectattr('name', 'equalto', lockout_policy.name) | first | default(None) }}"
+
+- name: Set lockout policy state
+  ansible.builtin.set_fact:
+    lockout_policy_exists: "{{ existing_lockout_policy is not none and existing_lockout_policy != None }}"
+    existing_lockout_pk: "{{ existing_lockout_policy.pk | default('') if existing_lockout_policy is not none and existing_lockout_policy != None else '' }}"
+
+- name: Build lockout policy expression
+  ansible.builtin.set_fact:
+    lockout_expression: |
+      # Account Lockout Policy
+      # Blocks login if user has too many recent failed attempts
+      # Config: {{ lockout_policy.max_failed_attempts }} failures in {{ lockout_policy.lockout_duration_minutes }} minutes
+      # IP Config: {{ lockout_policy.ip_max_failed_attempts }} failures per IP
+      from datetime import datetime, timedelta, timezone
+      from authentik.events.models import Event
+
+      LOCKOUT_DURATION = {{ lockout_policy.lockout_duration_minutes }}
+      MAX_ATTEMPTS = {{ lockout_policy.max_failed_attempts }}
+      IP_MAX_ATTEMPTS = {{ lockout_policy.ip_max_failed_attempts }}
+
+      cutoff = datetime.now(timezone.utc) - timedelta(minutes=LOCKOUT_DURATION)
+
+      {% if lockout_policy.check_ip_lockout | default(true) %}
+      # IP-based lockout for pre-authentication protection
+      # Applies even before user is identified to prevent enumeration attacks
+      client_ip = request.http_request.META.get('HTTP_X_FORWARDED_FOR', '').split(',')[0].strip()
+      if not client_ip:
+          client_ip = request.http_request.META.get('REMOTE_ADDR', '')
+
+      if client_ip:
+          ip_failed_count = Event.objects.filter(
+              action="login_failed",
+              client_ip=client_ip,
+              created__gte=cutoff
+          ).count()
+
+          if ip_failed_count >= IP_MAX_ATTEMPTS:
+              ak_message("Too many failed login attempts from this location. Please try again later or contact an administrator.")
+              return False
+      {% endif %}
+
+      # User-based lockout (only if user is identified)
+      if not request.user or not hasattr(request.user, 'pk') or not request.user.pk:
+          # User not yet identified - IP check above handles pre-auth protection
+          return True
+
+      {% if lockout_policy.allow_superuser_bypass | default(true) %}
+      # Superuser bypass for emergency admin access
+      if request.user.is_superuser:
+          return True
+      {% endif %}
+
+      # Get failed login attempts for this user
+      failed_events = Event.objects.filter(
+          action="login_failed",
+          user__pk=request.user.pk,
+          created__gte=cutoff
+      ).order_by('-created')
+
+      failed_count = failed_events.count()
+
+      if failed_count >= MAX_ATTEMPTS:
+          # Calculate remaining lockout time
+          if failed_events.exists():
+              oldest_relevant = failed_events.last()
+              unlock_time = oldest_relevant.created + timedelta(minutes=LOCKOUT_DURATION)
+              remaining = unlock_time - datetime.now(timezone.utc)
+              remaining_minutes = max(1, int(remaining.total_seconds() / 60) + 1)
+          else:
+              remaining_minutes = LOCKOUT_DURATION
+
+          ak_message(f"Account temporarily locked due to too many failed login attempts. Please try again in {remaining_minutes} minute{'s' if remaining_minutes != 1 else ''} or contact an administrator.")
+          return False
+
+      return True
+
+- name: Show lockout policy that would be created (check mode)
+  ansible.builtin.debug:
+    msg: "Would create lockout policy: {{ lockout_policy.name }} ({{ lockout_policy.max_failed_attempts }} user attempts, {{ lockout_policy.ip_max_failed_attempts }} IP attempts, {{ lockout_policy.lockout_duration_minutes }} min lockout)"
+  when: ansible_check_mode and not lockout_policy_exists
+
+- name: Show lockout policy that would be updated (check mode)
+  ansible.builtin.debug:
+    msg: "Would update lockout policy: {{ lockout_policy.name }}"
+  when: ansible_check_mode and lockout_policy_exists
+
+- name: Create lockout policy
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/policies/expression/"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      name: "{{ lockout_policy.name }}"
+      execution_logging: true
+      expression: "{{ lockout_expression }}"
+    status_code: [200, 201]
+  when:
+    - not ansible_check_mode
+    - not lockout_policy_exists
+  register: created_lockout_policy
+
+- name: Update existing lockout policy
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/policies/expression/{{ existing_lockout_pk }}/"
+    method: PUT
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      name: "{{ lockout_policy.name }}"
+      execution_logging: true
+      expression: "{{ lockout_expression }}"
+    status_code: [200]
+  when:
+    - not ansible_check_mode
+    - lockout_policy_exists
+    - existing_lockout_pk | length > 0
+  register: updated_lockout_policy
+
+# Properly determine the policy PK based on which operation occurred
+- name: Set lockout policy PK from created policy
+  ansible.builtin.set_fact:
+    lockout_policy_pk: "{{ created_lockout_policy.json.pk }}"
+  when:
+    - created_lockout_policy is defined
+    - created_lockout_policy is not skipped
+    - created_lockout_policy.json is defined
+    - created_lockout_policy.json.pk is defined
+
+- name: Set lockout policy PK from existing policy
+  ansible.builtin.set_fact:
+    lockout_policy_pk: "{{ existing_lockout_pk }}"
+  when:
+    - lockout_policy_pk is not defined
+    - existing_lockout_pk | length > 0
+
+- name: Verify lockout policy PK is set
+  ansible.builtin.assert:
+    that:
+      - lockout_policy_pk is defined
+      - lockout_policy_pk | length > 0
+    fail_msg: "Failed to determine lockout policy PK. Check if policy was created/exists."
+  when: not ansible_check_mode
+
+# Bind policy to identification stage in authentication flow
+- name: Get authentication flow
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/flows/instances/?slug=default-authentication-flow"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: auth_flow
+  check_mode: false
+
+- name: Verify authentication flow exists
+  ansible.builtin.assert:
+    that:
+      - auth_flow.json.results | length > 0
+    fail_msg: "Authentication flow 'default-authentication-flow' not found"
+
+- name: Set authentication flow PK
+  ansible.builtin.set_fact:
+    auth_flow_pk: "{{ auth_flow.json.results[0].pk }}"
+
+# Get flow stage bindings to find the identification stage
+- name: Get flow stage bindings
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/flows/bindings/?target={{ auth_flow_pk }}"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: flow_stage_bindings
+  check_mode: false
+
+# Find the identification stage binding (usually order 10, first stage in auth flow)
+- name: Find identification stage binding
+  ansible.builtin.set_fact:
+    identification_stage_binding: "{{ flow_stage_bindings.json.results | selectattr('stage_obj.component', 'equalto', 'ak-stage-identification') | first | default(None) }}"
+
+- name: Fallback to first stage if identification not found
+  ansible.builtin.set_fact:
+    target_stage_binding: "{{ identification_stage_binding if identification_stage_binding else (flow_stage_bindings.json.results | sort(attribute='order') | first | default(None)) }}"
+
+- name: Verify target stage binding found
+  ansible.builtin.assert:
+    that:
+      - target_stage_binding is not none
+      - target_stage_binding != None
+    fail_msg: "No stage bindings found in authentication flow"
+
+- name: Set target stage binding info
+  ansible.builtin.set_fact:
+    target_stage_binding_pk: "{{ target_stage_binding.pk }}"
+    target_stage_name: "{{ target_stage_binding.stage_obj.name | default('unknown') }}"
+    # policybindingmodel_ptr_id is the correct target for PolicyBinding
+    policy_binding_target: "{{ target_stage_binding.policybindingmodel_ptr_id }}"
+
+# Get existing policy bindings for this stage
+- name: Get existing policy bindings
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/policies/bindings/?target={{ policy_binding_target }}"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: existing_policy_bindings
+  check_mode: false
+
+# Check if lockout policy is already bound
+- name: Check if lockout policy already bound
+  ansible.builtin.set_fact:
+    lockout_binding_exists: "{{ existing_policy_bindings.json.results | selectattr('policy', 'defined') | selectattr('policy', 'equalto', lockout_policy_pk) | list | length > 0 }}"
+  when:
+    - lockout_policy_pk is defined
+    - lockout_policy_pk | length > 0
+
+- name: Default lockout binding exists to false
+  ansible.builtin.set_fact:
+    lockout_binding_exists: false
+  when: lockout_binding_exists is not defined
+
+- name: Show policy binding status (check mode)
+  ansible.builtin.debug:
+    msg: "Lockout policy binding to stage '{{ target_stage_name }}' {{ 'exists' if lockout_binding_exists else 'will be created' }}"
+  when: ansible_check_mode
+
+# Create policy binding for the stage
+- name: Create policy binding for lockout
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/policies/bindings/"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      policy: "{{ lockout_policy_pk }}"
+      target: "{{ policy_binding_target }}"
+      order: "{{ lockout_policy.binding_order | default(10) }}"
+      enabled: true
+      timeout: 30
+    status_code: [200, 201]
+  when:
+    - not ansible_check_mode
+    - lockout_policy_pk is defined
+    - lockout_policy_pk | length > 0
+    - not lockout_binding_exists
+  register: created_policy_binding

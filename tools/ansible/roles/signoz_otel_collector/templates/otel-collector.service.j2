@@ -1,0 +1,33 @@
+[Unit]
+Description=OpenTelemetry Collector
+Documentation=https://opentelemetry.io/docs/collector/
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=otel-collector
+Group=otel-collector
+ExecStart=/usr/local/bin/otelcol-contrib --config=/etc/otel-collector/config.yml
+Restart=always
+RestartSec=5
+TimeoutStartSec=30
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/otel-collector
+ReadOnlyPaths=/var/log
+
+# Docker access
+{% if otel_docker_metrics or otel_docker_logs | default(false) %}
+SupplementaryGroups=docker
+{% endif %}
+{% if otel_docker_logs | default(false) %}
+BindReadOnlyPaths=/var/lib/docker/containers
+{% endif %}
+
+[Install]
+WantedBy=multi-user.target

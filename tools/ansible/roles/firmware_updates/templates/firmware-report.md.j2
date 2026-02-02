@@ -1,0 +1,81 @@
+# Firmware Update Report
+
+**Date:** {{ ansible_date_time.date }} {{ ansible_date_time.time }}
+**Hostname:** {{ inventory_hostname }}
+**Hardware:** {{ ansible_product_name | default('Unknown') }} {{ ansible_product_version | default('') }}
+**Operator:** {{ lookup('env', 'USER') }}
+
+---
+
+## Update Status
+
+{% if firmware_updates_check.rc == 0 %}
+**Updates Available:** YES
+**Updates Applied:** {{ 'YES' if firmware_update_result.changed else 'FAILED' }}
+
+{% if firmware_update_result.changed %}
+### Updates Applied
+
+```
+{{ firmware_update_result.stdout }}
+```
+
+⚠️ **REBOOT REQUIRED** - Some firmware updates require a system reboot.
+{% else %}
+**Note:** Updates were available but failed to apply. Check logs below.
+{% endif %}
+
+{% else %}
+**Updates Available:** NO
+**Status:** System firmware is up to date - no action required
+{% endif %}
+
+---
+
+## Firmware Devices (Before Update)
+
+```
+{{ firmware_before.stdout }}
+```
+
+---
+
+## Firmware Devices (After Update)
+
+```
+{{ firmware_after.stdout }}
+```
+
+---
+
+## Metadata Refresh
+
+```
+{{ metadata_refresh.stdout }}
+```
+
+---
+
+## Available Updates Check
+
+```
+{{ firmware_updates_check.stdout if firmware_updates_check.rc == 0 else 'No updates available' }}
+```
+
+---
+
+## Next Steps
+
+{% if firmware_update_result.changed %}
+1. **Reboot the system** to apply firmware changes
+2. After reboot, verify updates: `fwupdmgr get-devices`
+3. Update the [Firmware Update Log](../docs/FIRMWARE_UPDATE_LOG.md) with new versions
+{% else %}
+1. Archive this report
+2. Schedule next monthly check
+3. Update the [Firmware Update Log](../docs/FIRMWARE_UPDATE_LOG.md) to record check was performed
+{% endif %}
+
+---
+
+**Report Path:** `/var/log/firmware-updates/{{ ansible_date_time.iso8601_basic_short }}-{{ inventory_hostname }}.md`

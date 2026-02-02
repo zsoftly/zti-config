@@ -1,0 +1,183 @@
+---
+# SigNoz OpenTelemetry Collector Installation
+
+# Validate required configuration
+- name: Validate otel_endpoint is configured
+  ansible.builtin.fail:
+    msg: |
+      otel_endpoint is required but not set.
+      Set it to your SigNoz internal NLB DNS name in group_vars or host_vars.
+      Example: internal-abc123.elb.ca-central-1.amazonaws.com
+  when: otel_endpoint | default('') | length == 0
+
+# Validate and determine architecture
+- name: Validate architecture is supported
+  ansible.builtin.fail:
+    msg: "Unsupported architecture: {{ ansible_facts['architecture'] }}. Supported: x86_64, aarch64, amd64, arm64"
+  when: ansible_facts['architecture'] not in ['x86_64', 'aarch64', 'amd64', 'arm64']
+
+- name: Determine architecture
+  ansible.builtin.set_fact:
+    otel_arch: "{{ 'arm64' if ansible_facts['architecture'] in ['aarch64', 'arm64'] else 'amd64' }}"
+
+- name: Create otel-collector user
+  ansible.builtin.user:
+    name: otel-collector
+    system: true
+    shell: /usr/sbin/nologin
+    create_home: false
+
+- name: Create otel-collector directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: otel-collector
+    group: otel-collector
+    mode: "0755"
+  loop:
+    - /etc/otel-collector
+    - /var/lib/otel-collector
+
+- name: Check if otel-collector is installed
+  ansible.builtin.stat:
+    path: /usr/local/bin/otelcol-contrib
+  register: otel_binary
+
+- name: Check installed otel-collector version
+  ansible.builtin.command:
+    cmd: /usr/local/bin/otelcol-contrib --version
+  register: otel_version_check
+  changed_when: false
+  failed_when: false
+  when: otel_binary.stat.exists
+
+- name: Set needs upgrade flag
+  ansible.builtin.set_fact:
+    otel_needs_upgrade: "{{ not otel_binary.stat.exists or (otel_version_check.stdout is defined and otel_collector_version not in otel_version_check.stdout) }}"
+
+- name: Show upgrade status
+  ansible.builtin.debug:
+    msg: "OTEL upgrade needed: {{ otel_needs_upgrade }} (current: {{ otel_version_check.stdout | default('not installed') }}, target: {{ otel_collector_version }})"
+  when: not ansible_check_mode
+
+- name: Remove old binary before upgrade
+  ansible.builtin.file:
+    path: /usr/local/bin/otelcol-contrib
+    state: absent
+  when:
+    - otel_needs_upgrade
+    - otel_binary.stat.exists
+    - not ansible_check_mode
+  notify: Restart otel-collector
+
+- name: Download otel-collector
+  when:
+    - otel_needs_upgrade
+    - not ansible_check_mode  # Skip in dry run - files won't exist
+  block:
+    - name: Download otel-collector binary
+      ansible.builtin.get_url:
+        url: "https://github.com/open-telemetry/opentelemetry-collector-releases/releases/download/v{{ otel_collector_version }}/otelcol-contrib_{{ otel_collector_version }}_linux_{{ otel_arch }}.tar.gz"
+        dest: /tmp/otelcol-contrib.tar.gz
+        mode: "0644"
+
+    - name: Extract otel-collector
+      ansible.builtin.unarchive:
+        src: /tmp/otelcol-contrib.tar.gz
+        dest: /tmp
+        remote_src: true
+
+    - name: Install otel-collector binary
+      ansible.builtin.copy:
+        src: /tmp/otelcol-contrib
+        dest: /usr/local/bin/otelcol-contrib
+        remote_src: true
+        mode: "0755"
+        owner: root
+        group: root
+
+    - name: Clean up temp files
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /tmp/otelcol-contrib.tar.gz
+        - /tmp/otelcol-contrib
+
+- name: Check mode notice - otel download skipped
+  ansible.builtin.debug:
+    msg: "Skipping OTEL collector download in check mode"
+  when:
+    - otel_needs_upgrade | default(true)
+    - ansible_check_mode
+
+- name: Configure otel-collector
+  ansible.builtin.template:
+    src: otel-collector-config.yml.j2
+    dest: /etc/otel-collector/config.yml
+    owner: otel-collector
+    group: otel-collector
+    mode: "0640"
+  notify: Restart otel-collector
+
+- name: Create systemd service
+  ansible.builtin.template:
+    src: otel-collector.service.j2
+    dest: /etc/systemd/system/otel-collector.service
+    mode: "0644"
+  notify:
+    - Reload systemd
+    - Restart otel-collector
+
+- name: Add otel-collector to docker group
+  when: otel_docker_metrics or otel_docker_logs | default(false)
+  ansible.builtin.user:
+    name: otel-collector
+    groups: docker
+    append: true
+  notify: Restart otel-collector
+
+- name: Install acl package for Docker log access
+  when: otel_docker_logs | default(false)
+  ansible.builtin.apt:
+    name: acl
+    state: present
+
+# ACL for Docker logs: need execute on parent for traversal
+- name: Grant otel-collector traverse access to /var/lib/docker
+  when: otel_docker_logs | default(false)
+  ansible.posix.acl:
+    path: /var/lib/docker
+    entity: otel-collector
+    etype: user
+    permissions: x
+    state: present
+  notify: Restart otel-collector
+
+- name: Grant otel-collector access to Docker container logs
+  when: otel_docker_logs | default(false)
+  ansible.posix.acl:
+    path: /var/lib/docker/containers
+    entity: otel-collector
+    etype: user
+    permissions: rX
+    recursive: true
+    default: true
+    state: present
+  notify: Restart otel-collector
+
+- name: Add otel-collector to adm group for log access
+  when: otel_logs_enabled | default(true)
+  ansible.builtin.user:
+    name: otel-collector
+    groups: adm
+    append: true
+  notify: Restart otel-collector
+
+- name: Enable and start otel-collector
+  ansible.builtin.systemd:
+    name: otel-collector
+    state: started
+    enabled: true
+    daemon_reload: true
+  when: otel_binary.stat.exists or not ansible_check_mode

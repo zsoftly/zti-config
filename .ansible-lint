@@ -1,0 +1,58 @@
+---
+# Ansible-lint configuration for zti-config
+
+profile: production
+
+# Exclude paths
+exclude_paths:
+  - .venv/
+  - venv/
+  - .git/
+  - .github/
+  - collections/ansible_collections/
+  - galaxy_collections/
+  - '**/*.md'
+
+# Skip specific rules
+skip_list:
+  - role-name  # Allow flexible role naming
+  - galaxy[no-changelog]  # Not publishing to Galaxy yet
+  - fqcn[action-core]  # Allow short module names for readability
+  - name[casing]  # Allow flexible task naming
+
+# Enable optional rules
+enable_list:
+  - no-same-owner  # Security: avoid setting same owner
+  - yaml  # YAML syntax checking
+
+# Warning vs Error
+warn_list:
+  - experimental
+  - ignore-errors
+  - no-handler
+  - command-instead-of-module
+
+# Kind mapping
+kinds:
+  - playbook: "**/playbooks/*.yml"
+  - playbook: "**/playbooks/*.yaml"
+  - tasks: "**/tasks/*.yml"
+  - tasks: "**/tasks/*.yaml"
+  - vars: "**/vars/*.yml"
+  - vars: "**/vars/*.yaml"
+  - defaults: "**/defaults/*.yml"
+  - defaults: "**/defaults/*.yaml"
+  - handlers: "**/handlers/*.yml"
+  - handlers: "**/handlers/*.yaml"
+
+# Mock modules
+mock_modules:
+  - authentik.*
+  - docker_compose
+
+# Mock roles
+mock_roles:
+  - wazuh_agent
+  - system_updates
+  - firmware_updates
+  - signoz_otel_collector

@@ -1,0 +1,162 @@
+# Notification Rules Configuration
+#
+# Severity levels: notice, warning, alert
+# Transports: example-email (sends email), default-local-transport (in-app), slack (webhook)
+#
+# Event actions reference:
+#   login, login_failed, logout
+#   authorize_application
+#   model_created, model_updated, model_deleted
+#   password_set, secret_view, secret_rotate
+#   policy_execution, policy_exception
+#   user_write, invitation_used
+#   source_linked, impersonation_started, impersonation_ended
+#   system_task_execution, system_task_exception
+#   configuration_error, update_available
+---
+
+# ==========================================================================
+# NOTIFICATION TRANSPORTS
+# ==========================================================================
+# Custom transports (email and local are built-in)
+# Webhook URLs stored in vault.yml
+
+notification_transports:
+  - name: "slack"
+    mode: "webhook_slack"
+    webhook_url_var: "vault_slack_webhook_url"
+    # send_once: true (default) - avoids duplicate notifications in chat
+
+  # Custom email transport with sanitized template
+  # The custom template is mounted via K8s ConfigMap at /templates/email/event_notification.html
+  # Template hides sensitive info: OAuth params, HTTP request details, stage PKs, etc.
+  - name: "example-email"
+    mode: "email"
+    send_once: true
+    # Custom subject prefix (customize with your organization name)
+    email_subject_prefix: "Example MSP Security Alert: "
+    # Template path - uses the mounted custom template
+    email_template: "email/event_notification.html"
+
+  # To add Google Chat later:
+  # - name: "google-chat"
+  #   mode: "webhook"
+  #   webhook_url_var: "vault_google_chat_webhook_url"
+
+notification_rules:
+  # ==========================================================================
+  # CRITICAL - Security Events (Email + Slack + In-App)
+  # ==========================================================================
+
+  - name: "Failed Login Attempts"
+    severity: "alert"
+    transports:
+      - "slack"
+      - "example-email"
+      - "default-local-transport"
+    event_match:
+      action: "login_failed"
+
+  - name: "Impersonation Started"
+    severity: "alert"
+    transports:
+      - "slack"
+      - "example-email"
+      - "default-local-transport"
+    event_match:
+      action: "impersonation_started"
+
+  - name: "Impersonation Ended"
+    severity: "warning"
+    transports:
+      - "default-local-transport"
+    event_match:
+      action: "impersonation_ended"
+
+  # ==========================================================================
+  # HIGH - Authentication Events (Email + In-App)
+  # ==========================================================================
+
+  - name: "User Logins"
+    severity: "notice"
+    transports:
+      - "default-local-transport"
+    event_match:
+      action: "login"
+
+  - name: "Application Authorization"
+    severity: "notice"
+    transports:
+      - "default-local-transport"
+    event_match:
+      action: "authorize_application"
+
+  # ==========================================================================
+  # MEDIUM - Model Changes (In-App Only)
+  # ==========================================================================
+
+  - name: "Model Created"
+    severity: "notice"
+    transports:
+      - "default-local-transport"
+    event_match:
+      action: "model_created"
+
+  - name: "Model Updated"
+    severity: "notice"
+    transports:
+      - "default-local-transport"
+    event_match:
+      action: "model_updated"
+
+  - name: "Model Deleted"
+    severity: "warning"
+    transports:
+      - "default-local-transport"
+    event_match:
+      action: "model_deleted"
+
+  # ==========================================================================
+  # MEDIUM - Credential Events (In-App Only)
+  # ==========================================================================
+
+  - name: "Secret Viewed"
+    severity: "notice"
+    transports:
+      - "default-local-transport"
+    event_match:
+      action: "secret_view"
+
+  - name: "Password Changed"
+    severity: "notice"
+    transports:
+      - "default-local-transport"
+    event_match:
+      action: "password_set"
+
+  - name: "User Write"
+    severity: "notice"
+    transports:
+      - "default-local-transport"
+    event_match:
+      action: "user_write"
+
+  # ==========================================================================
+  # SYSTEM - Task Events (In-App Only)
+  # ==========================================================================
+
+  - name: "System Task Exception"
+    severity: "warning"  # Downgraded from alert - check in-app notifications
+    transports:
+      - "default-local-transport"  # In-app only (no email spam for SCIM sync errors)
+    event_match:
+      action: "system_task_exception"
+
+  - name: "Configuration Error"
+    severity: "alert"
+    transports:
+      - "slack"
+      - "example-email"
+      - "default-local-transport"
+    event_match:
+      action: "configuration_error"

@@ -1,0 +1,166 @@
+#!/bin/bash
+# Headscale Control Script
+# Managed by Ansible
+# Compatible with Headscale v0.27+ (uses user ID instead of username)
+
+COMPOSE_DIR="/opt/headscale"
+
+# Helper: Get user ID from username (uses jq for reliable JSON parsing)
+# User namespaces: inf (infrastructure), <username> (per-person, e.g., user1)
+get_user_id() {
+  local username="${1:-inf}"
+  cd "$COMPOSE_DIR" && docker compose exec -T headscale headscale users list -o json 2>/dev/null | \
+    jq -r ".[] | select(.name == \"$username\") | .id"
+}
+
+case "$1" in
+  status|s)
+    cd "$COMPOSE_DIR" && docker compose ps
+    ;;
+  logs|l)
+    # Usage: hctl logs [service] [lines] or hctl logs -f [service]
+    SERVICE="headscale"
+    LINES=25
+    FOLLOW=""
+    shift  # Remove 'logs' or 'l'
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        -f|--follow) FOLLOW="-f"; shift ;;
+        [0-9]*) LINES="$1"; shift ;;
+        *) SERVICE="$1"; shift ;;
+      esac
+    done
+    cd "$COMPOSE_DIR" && docker compose logs $FOLLOW --tail="$LINES" "$SERVICE"
+    ;;
+  restart|r)
+    cd "$COMPOSE_DIR" && docker compose restart ${2:-}
+    ;;
+  stop)
+    cd "$COMPOSE_DIR" && docker compose stop
+    ;;
+  start)
+    cd "$COMPOSE_DIR" && docker compose up -d
+    ;;
+  backup|b)
+    /opt/headscale/backup.sh
+    ;;
+  health|h)
+    /opt/headscale/healthcheck.sh
+    echo "Check /var/log/headscale-healthcheck.log for details"
+    ;;
+  update|up)
+    cd "$COMPOSE_DIR" && docker compose pull && docker compose up -d
+    ;;
+  # Headscale-specific commands
+  users|u)
+    cd "$COMPOSE_DIR" && docker compose exec headscale headscale users list
+    ;;
+  nodes|n)
+    cd "$COMPOSE_DIR" && docker compose exec headscale headscale nodes list
+    ;;
+  keys|k)
+    if [ -z "$2" ]; then
+      echo "Usage: hctl keys <username>"
+      echo ""
+      echo "Available users:"
+      cd "$COMPOSE_DIR" && docker compose exec -T headscale headscale users list -o json | jq -r '.[].name'
+      exit 1
+    fi
+    USER_ID=$(get_user_id "$2")
+    if [ -z "$USER_ID" ]; then
+      echo "Error: User '$2' not found"
+      echo "Available users:"
+      cd "$COMPOSE_DIR" && docker compose exec -T headscale headscale users list -o json | jq -r '.[].name'
+      exit 1
+    fi
+    cd "$COMPOSE_DIR" && docker compose exec headscale headscale preauthkeys list -u "$USER_ID"
+    ;;
+  create-user)
+    if [ -z "$2" ]; then
+      echo "Usage: hctl create-user <username>"
+      exit 1
+    fi
+    cd "$COMPOSE_DIR" && docker compose exec headscale headscale users create "$2"
+    ;;
+  create-key)
+    if [ -z "$2" ]; then
+      echo "Usage: hctl create-key <username> [options]"
+      echo ""
+      echo "Options:"
+      echo "  --tags tag:x,tag:y   Role tags (e.g., tag:eng,tag:npd)"
+      echo "  --reusable           Allow multiple uses"
+      echo "  --ephemeral          Ephemeral key"
+      echo "  -e <duration>        Expiry (default: 720h)"
+      echo ""
+      echo "Examples:"
+      echo "  hctl create-key user2 --tags tag:eng,tag:npd -e 720h"
+      echo "  hctl create-key inf --tags tag:lab --reusable -e 8760h"
+      exit 1
+    fi
+    USER_ID=$(get_user_id "$2")
+    if [ -z "$USER_ID" ]; then
+      echo "Error: User '$2' not found"
+      echo "Available users:"
+      cd "$COMPOSE_DIR" && docker compose exec -T headscale headscale users list -o json | jq -r '.[].name'
+      exit 1
+    fi
+    shift 2  # Remove 'create-key' and username
+    cd "$COMPOSE_DIR" && docker compose exec headscale headscale preauthkeys create -u "$USER_ID" "$@"
+    ;;
+  delete-node)
+    if [ -z "$2" ]; then
+      echo "Usage: hctl delete-node <node-id>"
+      exit 1
+    fi
+    cd "$COMPOSE_DIR" && docker compose exec headscale headscale nodes delete -i "$2"
+    ;;
+  routes)
+    cd "$COMPOSE_DIR" && docker compose exec headscale headscale nodes list-routes
+    ;;
+  approve-routes)
+    if [ -z "$2" ] || [ -z "$3" ]; then
+      echo "Usage: hctl approve-routes <node-id> <cidr1,cidr2,...>"
+      echo "Example: hctl approve-routes 1 10.0.0.0/16,172.16.0.0/12"
+      exit 1
+    fi
+    cd "$COMPOSE_DIR" && docker compose exec headscale headscale nodes approve-routes --identifier "$2" --routes "$3"
+    ;;
+  api-key)
+    # Create API key with 999-day expiry (for Headplane)
+    cd "$COMPOSE_DIR" && docker compose exec headscale headscale apikeys create --expiration 999d
+    ;;
+  exec)
+    shift
+    cd "$COMPOSE_DIR" && docker compose exec headscale headscale "$@"
+    ;;
+  *)
+    echo "Usage: hctl <command>"
+    echo ""
+    echo "Status Commands:"
+    echo "  s, status      Show container status"
+    echo "  l, logs        Show logs (hctl l caddy 50, hctl l -f to follow)"
+    echo ""
+    echo "Lifecycle Commands:"
+    echo "  r, restart     Restart containers"
+    echo "  stop           Stop all containers"
+    echo "  start          Start all containers"
+    echo "  up, update     Pull latest images and restart"
+    echo "  b, backup      Run manual backup"
+    echo "  h, health      Run health check (auto-repairs issues)"
+    echo ""
+    echo "Headscale Commands:"
+    echo "  u, users         List all users"
+    echo "  n, nodes         List all nodes"
+    echo "  k, keys          List preauth keys (hctl k <username>)"
+    echo "  routes           List advertised routes"
+    echo "  approve-routes   Approve routes (hctl approve-routes <node-id> <cidrs>)"
+    echo "  create-user      Create user (hctl create-user <name>)"
+    echo "  create-key       Create preauth key (hctl create-key <username> --tags tag:x)"
+    echo "  delete-node      Delete node (hctl delete-node <id>)"
+    echo "  api-key          Generate API key"
+    echo "  exec             Run headscale command (hctl exec <args...>)"
+    echo ""
+    echo "User namespaces: inf (infrastructure), <username> (per-person, e.g., user1)"
+    exit 1
+    ;;
+esac

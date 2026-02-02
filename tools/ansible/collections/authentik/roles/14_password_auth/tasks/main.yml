@@ -1,0 +1,127 @@
+# Configure Password Authentication Stage
+# Enables username/password login alongside OAuth
+---
+- name: Get existing password stages
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/stages/password/"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: existing_password_stages
+  check_mode: false
+
+- name: Check if password stage exists
+  ansible.builtin.set_fact:
+    password_stage_exists: "{{ password_auth.password_stage.name in (existing_password_stages.json.results | map(attribute='name') | list) }}"
+    existing_password_stage: "{{ existing_password_stages.json.results | selectattr('name', 'equalto', password_auth.password_stage.name) | first | default({}) }}"
+
+- name: Show password stage status (check mode)
+  ansible.builtin.debug:
+    msg: "Password stage '{{ password_auth.password_stage.name }}' {{ 'exists' if password_stage_exists else 'will be created' }}"
+  when: ansible_check_mode
+
+- name: Create password authentication stage
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/stages/password/"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      name: "{{ password_auth.password_stage.name }}"
+      backends: "{{ password_auth.password_stage.backends }}"
+      failed_attempts_before_cancel: "{{ password_auth.password_stage.failed_attempts_before_cancel }}"
+    status_code: [200, 201]
+  when:
+    - not ansible_check_mode
+    - not password_stage_exists
+  register: created_password_stage
+
+- name: Set password stage PK
+  ansible.builtin.set_fact:
+    password_stage_pk: "{{ created_password_stage.json.pk | default(existing_password_stage.pk | default('check-mode-placeholder')) }}"
+  when: password_stage_exists or (created_password_stage.json is defined)
+
+- name: Skip remaining tasks in check mode when stage doesn't exist
+  ansible.builtin.debug:
+    msg: "Password stage will be created on actual run"
+  when:
+    - ansible_check_mode
+    - not password_stage_exists
+
+# Get the authentication flow
+- name: Get authentication flow
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/flows/instances/?slug={{ password_auth.flow_binding.flow_slug }}"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: auth_flow
+  check_mode: false
+
+- name: Verify authentication flow exists
+  ansible.builtin.assert:
+    that:
+      - auth_flow.json.results | length > 0
+    fail_msg: "Authentication flow '{{ password_auth.flow_binding.flow_slug }}' not found"
+
+- name: Set authentication flow PK
+  ansible.builtin.set_fact:
+    auth_flow_pk: "{{ auth_flow.json.results[0].pk }}"
+
+# Check existing flow bindings
+- name: Get existing flow stage bindings
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/flows/bindings/?target={{ auth_flow_pk }}"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: existing_flow_bindings
+  check_mode: false
+
+- name: Check if password stage already bound to flow
+  ansible.builtin.set_fact:
+    password_binding_exists: "{{ password_stage_pk in (existing_flow_bindings.json.results | map(attribute='stage') | list) }}"
+  when: password_stage_pk is defined
+
+- name: Show flow binding status (check mode)
+  ansible.builtin.debug:
+    msg: "Password stage binding to '{{ password_auth.flow_binding.flow_slug }}' {{ 'exists' if (password_binding_exists | default(false)) else 'will be created' }}"
+  when: ansible_check_mode
+
+# Bind password stage to authentication flow
+- name: Bind password stage to authentication flow
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/flows/bindings/"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      target: "{{ auth_flow_pk }}"
+      stage: "{{ password_stage_pk }}"
+      order: "{{ password_auth.flow_binding.order }}"
+      evaluate_on_plan: true
+      re_evaluate_policies: true
+      invalid_response_action: "retry"
+    status_code: [200, 201]
+  when:
+    - not ansible_check_mode
+    - password_stage_pk is defined
+    - not (password_binding_exists | default(false))
+  register: created_flow_binding
+
+- name: Display password authentication configuration status
+  ansible.builtin.pause:
+    seconds: 0
+    prompt: |
+
+      Password Authentication Configuration:
+        Stage: {{ password_auth.password_stage.name }}
+        Flow: {{ password_auth.flow_binding.flow_slug }}
+        Order: {{ password_auth.flow_binding.order }}

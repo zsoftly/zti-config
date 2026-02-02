@@ -1,0 +1,58 @@
+---
+# Headscale VPN Server Installation Playbook
+#
+# Prerequisites:
+#   export HEADSCALE_ANSIBLE_VAULT_PASS="your-vault-password"
+#
+# Usage:
+#   ansible-playbook playbooks/headscale-install.yml           # Full install
+#   ansible-playbook playbooks/headscale-install.yml -t caddy  # Caddyfile only
+#   ansible-playbook playbooks/headscale-install.yml -t config # All configs
+#   ansible-playbook playbooks/headscale-install.yml -t deploy # Docker up
+#   ansible-playbook playbooks/headscale-install.yml -t hctl   # hctl script only
+#   ansible-playbook playbooks/headscale-install.yml -t otel   # OTEL only
+
+- name: Install Headscale VPN Server
+  hosts: all
+  become: true
+  gather_facts: true
+
+  vars_files:
+    - ../vars/headscale.yml
+    - ../vars/vault.yml
+
+  roles:
+    - prerequisites
+    - docker
+    - role: system_config
+      tags: [system_config, firewall]
+    - headscale
+    - backup
+    - management
+
+  post_tasks:
+    - name: Install SigNoz OTEL Collector
+      when: otel_enabled | default(false)
+      ansible.builtin.include_role:
+        name: signoz_otel_collector
+        apply:
+          tags: [otel]
+      tags: [otel, always]
+      vars:
+        otel_service_name: "headscale"
+        otel_service_environment: "{{ headscale_environment | default('sbx') }}"
+        otel_log_paths:
+          - "/var/log/syslog"
+          - "/var/log/auth.log"
+        # Enable Docker container log collection (headscale runs in Docker)
+        otel_docker_logs: true
+        # Parse headscale "handled request" JSON logs for VPN connection tracking
+        otel_headscale_log_parsing: true
+
+    - name: Install Wazuh Agent
+      when: wazuh_agent_enabled | default(false)
+      ansible.builtin.include_role:
+        name: wazuh_agent
+        apply:
+          tags: [wazuh, security]
+      tags: [wazuh, security, always]

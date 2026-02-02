@@ -1,0 +1,20 @@
+# Password Authentication Configuration
+# Enables username/password login alongside OAuth
+---
+
+password_auth:
+  # Password stage configuration
+  password_stage:
+    name: "example-authentication-password"
+    # Authentication backends to use
+    backends:
+      - "authentik.core.auth.InbuiltBackend"
+    # Number of failed attempts before cancellation
+    failed_attempts_before_cancel: 5
+
+  # Flow binding configuration
+  flow_binding:
+    # Bind to the default authentication flow
+    flow_slug: "default-authentication-flow"
+    # Order: After identification (10), before MFA (30)
+    order: 20

@@ -1,0 +1,19 @@
+---
+# Backup configuration role
+
+- name: Create backup script
+  ansible.builtin.template:
+    src: backup.sh.j2
+    dest: /opt/headscale/backup.sh
+    mode: "0755"
+
+- name: Configure backup cron job
+  ansible.builtin.cron:
+    name: "Headscale daily backup"
+    minute: "{{ headscale_backup_schedule.split()[0] }}"
+    hour: "{{ headscale_backup_schedule.split()[1] }}"
+    day: "{{ headscale_backup_schedule.split()[2] }}"
+    month: "{{ headscale_backup_schedule.split()[3] }}"
+    weekday: "{{ headscale_backup_schedule.split()[4] }}"
+    job: "/opt/headscale/backup.sh >> /var/log/headscale-backup.log 2>&1"
+    user: root

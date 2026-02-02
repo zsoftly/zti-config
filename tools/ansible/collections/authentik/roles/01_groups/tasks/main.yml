@@ -1,0 +1,50 @@
+# Create Authentik Groups
+# Supports: --check --diff for dry runs
+---
+- name: Get existing groups
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/core/groups/"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: existing_groups
+  check_mode: false
+
+- name: Get existing group names
+  ansible.builtin.set_fact:
+    existing_group_names: "{{ existing_groups.json.results | map(attribute='name') | list }}"
+
+- name: Show groups that would be created (check mode)
+  ansible.builtin.debug:
+    msg: "Would create group: {{ item.name }}"
+  loop: "{{ authentik_groups }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when:
+    - ansible_check_mode
+    - item.name not in existing_group_names
+
+- name: Create groups
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/core/groups/"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      name: "{{ item.name }}"
+      is_superuser: "{{ item.is_superuser | default(false) }}"
+    status_code: [200, 201]
+  loop: "{{ authentik_groups }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when:
+    - not ansible_check_mode
+    - item.name not in existing_group_names
+  register: created_groups
+
+- name: Display groups configured
+  ansible.builtin.debug:
+    msg: "Groups: {{ existing_group_names | join(', ') }}"

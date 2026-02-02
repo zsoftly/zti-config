@@ -1,0 +1,208 @@
+# Create Authentik Users and Service Accounts
+---
+- name: Get existing users
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/core/users/?page_size=500"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: existing_users
+  tags: always
+
+- name: Build existing users lookup
+  ansible.builtin.set_fact:
+    existing_users_by_username: "{{ existing_users.json.results | items2dict(key_name='username', value_name='pk') }}"
+  tags: always
+
+- name: Get existing groups
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/core/groups/?page_size=500"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: existing_groups
+  tags: always
+
+- name: Build groups lookup
+  ansible.builtin.set_fact:
+    groups_by_name: "{{ existing_groups.json.results | items2dict(key_name='name', value_name='pk') }}"
+  tags: always
+
+# Regular Users
+- name: Create users
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/core/users/"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      username: "{{ item.username }}"
+      name: "{{ item.name }}"
+      email: "{{ item.email }}"
+      is_active: true
+      type: internal
+      path: "users"
+    status_code: [200, 201]
+  loop: "{{ authentik_users | default([]) }}"
+  loop_control:
+    label: "{{ item.username }}"
+  when: item.username not in existing_users_by_username
+  register: created_users
+
+- name: Display created users
+  ansible.builtin.debug:
+    msg: "Created user: {{ item.item.username }}"
+  loop: "{{ created_users.results | default([]) }}"
+  loop_control:
+    label: "{{ item.item.username | default('skipped') }}"
+  when: item.changed | default(false)
+
+# Service Accounts
+- name: Create service accounts
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/core/users/"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      username: "{{ item.username }}"
+      name: "{{ item.name }}"
+      email: "{{ item.email }}"
+      is_active: true
+      type: service_account
+      path: "service-accounts"
+    status_code: [200, 201]
+  loop: "{{ service_accounts | default([]) }}"
+  loop_control:
+    label: "{{ item.username }}"
+  when: item.username not in existing_users_by_username
+  register: created_service_accounts
+
+- name: Display created service accounts
+  ansible.builtin.debug:
+    msg: "Created service account: {{ item.item.username }}"
+  loop: "{{ created_service_accounts.results | default([]) }}"
+  loop_control:
+    label: "{{ item.item.username | default('skipped') }}"
+  when: item.changed | default(false)
+
+# Refresh users list after creation
+- name: Refresh users list
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/core/users/?page_size=500"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: refreshed_users
+  when: (created_users.changed | default(false)) or (created_service_accounts.changed | default(false))
+  tags: always
+
+- name: Update users lookup
+  ansible.builtin.set_fact:
+    existing_users_by_username: "{{ refreshed_users.json.results | items2dict(key_name='username', value_name='pk') }}"
+  when: refreshed_users.json is defined
+  tags: always
+
+# LDAP Bind Users (must be internal type per Authentik docs, not service_accounts)
+- name: Create LDAP bind users as internal type
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/core/users/"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      username: "{{ item.username }}"
+      name: "{{ item.name }}"
+      email: "{{ item.email }}"
+      is_active: true
+      type: internal
+      path: "users"
+    status_code: [200, 201]
+  loop: "{{ ldap_bind_users | default([]) }}"
+  loop_control:
+    label: "{{ item.username }}"
+  when: item.username not in existing_users_by_username
+  register: created_ldap_users
+  tags: always
+
+- name: Update existing LDAP bind user to internal type
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/core/users/{{ existing_users_by_username[item.username] }}/"
+    method: PATCH
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      type: internal
+      path: "users"
+    status_code: [200]
+  loop: "{{ ldap_bind_users | default([]) }}"
+  loop_control:
+    label: "{{ item.username }}"
+  when: item.username in existing_users_by_username
+  register: updated_ldap_users
+  tags: always
+
+- name: Display converted LDAP bind users
+  ansible.builtin.debug:
+    msg: "Converted {{ item.item.username }} from service_account to internal type for LDAP binds"
+  loop: "{{ updated_ldap_users.results | default([]) }}"
+  loop_control:
+    label: "{{ item.item.username | default('skipped') }}"
+  when: item.changed | default(false)
+  tags: always
+
+# Refresh after LDAP user changes
+- name: Refresh users list after LDAP user changes
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/core/users/?page_size=500"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: refreshed_users_ldap
+  when: (created_ldap_users.changed | default(false)) or (updated_ldap_users.changed | default(false))
+  tags: always
+
+- name: Update users lookup after LDAP changes
+  ansible.builtin.set_fact:
+    existing_users_by_username: "{{ refreshed_users_ldap.json.results | items2dict(key_name='username', value_name='pk') }}"
+  when: refreshed_users_ldap.json is defined
+  tags: always
+
+# Update group memberships for all users
+- name: Update user group memberships
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/core/users/{{ existing_users_by_username[item.username] }}/"
+    method: PATCH
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      groups: "{{ item.groups | default([]) | select('in', groups_by_name.keys()) | map('extract', groups_by_name) | list }}"
+    status_code: [200]
+  loop: "{{ (authentik_users | default([])) + (service_accounts | default([])) + (ldap_bind_users | default([])) }}"
+  loop_control:
+    label: "{{ item.username }}"
+  when:
+    - item.username in existing_users_by_username
+    - item.groups is defined
+  tags: always
+
+- name: Display users summary
+  ansible.builtin.debug:
+    msg: |
+      Users configured: {{ authentik_users | default([]) | map(attribute='username') | join(', ') | default('none') }}
+      Service accounts: {{ service_accounts | default([]) | map(attribute='username') | join(', ') | default('none') }}
+      LDAP bind users (internal): {{ ldap_bind_users | default([]) | map(attribute='username') | join(', ') | default('none') }}

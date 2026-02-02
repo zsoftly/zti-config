@@ -1,0 +1,32 @@
+---
+name: Markdown Format Check
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '**.md'
+  push:
+    branches: [main]
+    paths:
+      - '**.md'
+
+jobs:
+  format-check:
+    name: Check Markdown Formatting
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install prettier
+        run: npm install prettier
+
+      - name: Check markdown formatting
+        run: npx prettier --check '**/*.md'

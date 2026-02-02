@@ -1,0 +1,45 @@
+# AWS IAM Identity Center SCIM Provider Configuration
+#
+# Syncs USERS and GROUPS from Authentik to AWS IAM Identity Center.
+#
+# How it works:
+# - Users in filter_group (aws-users) are synced to AWS
+# - ALL groups sync to AWS (non-aws groups get 501 errors - harmless)
+# - Only groups with permission set assignments in AWS grant access
+# - Uses compatibility_mode: 'aws' for AWS-specific SCIM behavior
+#
+# Prerequisites:
+# 1. Assign users to aws-users group in Authentik
+# 2. Create AWS SSO SAML provider (run --tags saml)
+# 3. Enable automatic provisioning in AWS IAM Identity Center
+# 4. Copy SCIM endpoint URL and access token to vault.yml:
+#    - vault_aws_sso_scim_endpoint
+#    - vault_aws_sso_scim_token
+#
+# Usage:
+#   ansible-playbook playbooks/configure.yml --tags aws_scim
+#   ansible-playbook playbooks/configure.yml --tags aws_scim -e aws_scim_force_reset=true
+#
+# Notes:
+# - userName is set to user's email for SAML matching
+# - Group membership changes require force reset to sync (Authentik limitation)
+#
+# Dependencies:
+# - Requires 09_scim_defaults role to run first (creates SCIM email mapping)
+---
+
+# AWS SCIM Provider settings
+aws_scim_provider:
+  # Provider name in Authentik
+  name: "aws-identity-center-scim"
+
+  # SCIM endpoint URL from AWS IAM Identity Center
+  # Format: https://scim.<region>.amazonaws.com/<instance-id>/scim/v2
+  url: "{{ vault_aws_sso_scim_endpoint | default('') }}"
+
+  # SCIM access token (from vault)
+  token_var: "vault_aws_sso_scim_token"
+
+  # Parent group for user filtering
+  # Only users in this group are synced to AWS
+  filter_group: "aws-users"

@@ -1,0 +1,4 @@
+.venv/
+*.retry
+# Encrypt before committing: ansible-vault encrypt vars/google-oauth.yml
+# vars/google-oauth.yml

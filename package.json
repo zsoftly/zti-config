@@ -1,0 +1,24 @@
+{
+  "name": "zti-config",
+  "version": "1.0.0",
+  "description": "Configuration management roles and playbooks for MSP infrastructure tools",
+  "scripts": {
+    "fmt": "prettier --write '**/*.md'",
+    "fmt:check": "prettier --check '**/*.md'"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/example-org/zti-config.git"
+  },
+  "keywords": [
+    "ansible",
+    "configuration-management",
+    "infrastructure",
+    "devops"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "prettier": "^3.0.0"
+  }
+}

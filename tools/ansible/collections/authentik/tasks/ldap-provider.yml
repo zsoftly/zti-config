@@ -1,0 +1,164 @@
+# Create LDAP Provider and Outpost
+---
+- name: Get existing LDAP providers
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/providers/ldap/"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: existing_ldap_providers
+  check_mode: false
+
+- name: Get default authentication flow
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/flows/instances/?slug=default-authentication-flow"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: auth_flow
+  check_mode: false
+
+- name: Get self-signed certificate
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/crypto/certificatekeypairs/?name=authentik%20Self-signed%20Certificate"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: cert
+  check_mode: false
+
+- name: Get default invalidation flow
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/flows/instances/?slug=default-invalidation-flow"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: invalidation_flow
+  check_mode: false
+
+- name: Create LDAP provider
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/providers/ldap/"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      name: "example-ldap"
+      authorization_flow: "{{ auth_flow.json.results[0].pk }}"
+      invalidation_flow: "{{ invalidation_flow.json.results[0].pk }}"
+      base_dn: "dc=example,dc=com"
+      certificate: "{{ cert.json.results[0].pk | default(omit) }}"
+      search_mode: "cached"
+      bind_mode: "cached"
+      mfa_support: false
+    status_code: [200, 201]
+  when: "'example-ldap' not in (existing_ldap_providers.json.results | map(attribute='name') | list)"
+  register: ldap_provider
+
+- name: Get LDAP provider details
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/providers/ldap/?name=example-ldap"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: ldap_provider_details
+  check_mode: false
+
+- name: Get existing applications
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/core/applications/"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: existing_apps
+  check_mode: false
+
+- name: Create LDAP application
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/core/applications/"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      name: "Linux Servers"
+      slug: "linux-servers"
+      provider: "{{ ldap_provider_details.json.results[0].pk }}"
+    status_code: [200, 201]
+  when: "'linux-servers' not in (existing_apps.json.results | map(attribute='slug') | list)"
+  register: ldap_app
+
+- name: Get existing outposts
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/outposts/instances/"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: existing_outposts
+  check_mode: false
+
+- name: Get local Kubernetes integration
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/outposts/service_connections/kubernetes/?name=Local%20Kubernetes%20Cluster"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: k8s_integration
+  check_mode: false
+
+- name: Get LDAP application for outpost
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/core/applications/?slug=linux-servers"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: ldap_app_details
+  check_mode: false
+
+- name: Create LDAP outpost
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/outposts/instances/"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      name: "ldap-outpost"
+      type: "ldap"
+      service_connection: "{{ k8s_integration.json.results[0].pk }}"
+      providers:
+        - "{{ ldap_provider_details.json.results[0].pk }}"
+      config:
+        authentik_host: "{{ authentik_url }}"
+        log_level: "info"
+    status_code: [200, 201]
+  when: "'ldap-outpost' not in (existing_outposts.json.results | map(attribute='name') | list)"
+  register: ldap_outpost
+
+- name: Display LDAP configuration
+  ansible.builtin.debug:
+    msg:
+      - "=========================================="
+      - "LDAP Configuration Summary"
+      - "=========================================="
+      - "LDAP Provider: example-ldap"
+      - "Base DN: dc=example,dc=com"
+      - "Application: Linux Servers"
+      - "Outpost: ldap-outpost"
+      - ""
+      - "Service will be available at:"
+      - "kubectl get svc -n authentik -l app.kubernetes.io/name=authentik-outpost-ldap"
+      - "=========================================="

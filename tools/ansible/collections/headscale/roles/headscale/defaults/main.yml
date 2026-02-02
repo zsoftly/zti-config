@@ -1,0 +1,30 @@
+---
+# Headscale role defaults
+
+# Set to true to force recreation of config and reset database
+headscale_force_recreate: false
+
+# Set to true to update config without wiping database
+headscale_update_config: false
+
+# Headscale version
+headscale_version: "0.23.0"
+
+# Network prefixes (CGNAT range)
+headscale_ipv4_prefix: "100.64.0.0/10"
+headscale_ipv6_prefix: "fd7a:115c:a1e0::/48"
+
+# DNS configuration
+headscale_dns_servers:
+  - "10.0.0.2"      # AWS VPC DNS
+  - "1.1.1.1"       # Cloudflare fallback
+
+# Magic DNS base domain
+headscale_base_domain: "vpn.example.com"
+
+# DERP configuration
+headscale_derp_enabled: true
+
+# Metrics
+headscale_metrics_enabled: true
+headscale_metrics_port: 9090

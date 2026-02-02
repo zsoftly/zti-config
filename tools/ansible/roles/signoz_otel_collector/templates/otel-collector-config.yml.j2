@@ -1,0 +1,210 @@
+# OpenTelemetry Collector Configuration
+# Managed by Ansible - Do not edit manually
+#
+# LOG FILTERING STRATEGY:
+# Logs are filtered at source (this collector) NOT at SigNoz.
+# Only WARN/ERROR/FATAL logs are sent. INFO/DEBUG are dropped here.
+#
+# Why filter at source:
+#   1. Reduces network traffic to SigNoz (~90% less data)
+#   2. Reduces SigNoz storage costs
+#   3. Reduces noise - dashboards show only actionable logs
+#
+# To change: edit filter expressions in filelog receivers below.
+
+receivers:
+  # Host metrics
+  hostmetrics:
+    collection_interval: {{ otel_metrics_interval }}
+    scrapers:
+{% if otel_host_metrics.cpu %}
+      cpu:
+        metrics:
+          system.cpu.utilization:
+            enabled: true
+{% endif %}
+{% if otel_host_metrics.memory %}
+      memory:
+        metrics:
+          system.memory.utilization:
+            enabled: true
+{% endif %}
+{% if otel_host_metrics.disk %}
+      disk: {}
+{% endif %}
+{% if otel_host_metrics.filesystem %}
+      filesystem: {}
+{% endif %}
+{% if otel_host_metrics.network %}
+      network: {}
+{% endif %}
+{% if otel_host_metrics.load %}
+      load: {}
+{% endif %}
+      processes: {}
+
+{% if otel_docker_metrics %}
+  # Docker container metrics
+  docker_stats:
+    endpoint: unix:///var/run/docker.sock
+    api_version: "1.44"
+    collection_interval: {{ otel_metrics_interval }}
+    timeout: 10s
+{% endif %}
+
+{% if otel_logs_enabled %}
+  # System logs - filter to WARN/ERROR only
+  filelog:
+    include:
+{% for path in otel_log_paths %}
+      - {{ path }}
+{% endfor %}
+    start_at: end
+    operators:
+      # Filter: drop logs that DON'T match error/warn patterns (keep only WARN, ERROR, FATAL)
+      # Note: filter operator drops logs where expr=true, so we use 'not' to invert
+      - type: filter
+        expr: 'not (body matches "{{ otel_log_filter_pattern }}")'
+{% endif %}
+
+{% if otel_docker_logs %}
+  # Docker container logs - parse and filter to WARN/ERROR only
+  filelog/docker:
+    include:
+      - /var/lib/docker/containers/*/*-json.log
+    include_file_path: true
+    start_at: end
+    operators:
+      # Parse Docker JSON format
+      - type: json_parser
+        timestamp:
+          parse_from: attributes.time
+          layout: '%Y-%m-%dT%H:%M:%S.%LZ'
+      # Move log message to body
+      - type: move
+        from: attributes.log
+        to: body
+      # Filter: drop logs that DON'T match patterns (keep only WARN, ERROR, FATAL + headscale events)
+      # Note: filter operator drops logs where expr=true, so we use 'not' to invert
+      - type: filter
+{% if otel_headscale_log_parsing %}
+        expr: 'not (body matches "{{ otel_log_filter_pattern }}" or body contains "Node connected" or body contains "Node disconnected")'
+{% else %}
+        expr: 'not (body matches "{{ otel_log_filter_pattern }}")'
+{% endif %}
+{% endif %}
+
+processors:
+  # Add resource attributes
+  resource:
+    attributes:
+      - key: service.name
+        value: {{ otel_service_name }}
+        action: upsert
+      - key: deployment.environment
+        value: {{ otel_service_environment }}
+        action: upsert
+      - key: host.name
+        value: {{ inventory_hostname }}
+        action: upsert
+
+  # Batch for efficiency
+  batch:
+    timeout: 10s
+    send_batch_size: 1024
+
+  # Memory limiter - prevents OOM, increase for heavy Docker log environments
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: {{ otel_memory_limit_mib }}
+    spike_limit_mib: {{ otel_memory_spike_mib }}
+
+{% if otel_headscale_log_parsing %}
+  # Headscale VPN log parsing - extracts fields from logfmt logs
+  # Example: "2026-01-01T17:39:08Z INF Node connected node.id=4 node.name=ditah-mbp-m1"
+  # Extracts: event_type (connected/disconnected), node_id, node_name
+  transform/headscale_parse:
+    error_mode: ignore
+    log_statements:
+      - context: log
+        statements:
+          # Extract node.id and node.name from logfmt
+          - 'merge_maps(attributes, ExtractPatterns(body, "node\\.id=(?P<node_id>\\d+)"), "upsert") where IsString(body) and IsMatch(body, "node\\.id=")'
+          - 'merge_maps(attributes, ExtractPatterns(body, "node\\.name=(?P<node_name>[^\\s]+)"), "upsert") where IsString(body) and IsMatch(body, "node\\.name=")'
+          # Extract event type (connected/disconnected)
+          - 'set(attributes["event_type"], "connected") where IsString(body) and IsMatch(body, "Node connected")'
+          - 'set(attributes["event_type"], "disconnected") where IsString(body) and IsMatch(body, "Node disconnected")'
+          # Extract log level
+          - 'set(attributes["level"], "info") where IsString(body) and IsMatch(body, " INF ")'
+          - 'set(attributes["level"], "error") where IsString(body) and IsMatch(body, " ERR ")'
+          - 'set(attributes["level"], "warn") where IsString(body) and IsMatch(body, " WRN ")'
+{% endif %}
+
+exporters:
+  # SigNoz OTLP exporter via Traefik NLB
+  otlp:
+    # Endpoint should include port (e.g., signoz.example.com:4317)
+    endpoint: "{{ otel_endpoint }}"
+    tls:
+      insecure: {{ otel_insecure | default(true) | lower }}
+    # Retry policy for transient failures
+    retry_on_failure:
+      enabled: true
+      initial_interval: 5s
+      max_interval: 30s
+      max_elapsed_time: {{ otel_retry_max_elapsed_time }}
+    # Sending queue - buffers data during connection issues
+    # Prevents data loss when SigNoz is temporarily unreachable
+    sending_queue:
+      enabled: true
+      num_consumers: {{ otel_queue_num_consumers }}
+      queue_size: {{ otel_queue_size }}
+    # Keepalive - prevents NLB from closing idle connections (EOF errors)
+    # Sends pings before NLB idle timeout (typically 60-350s)
+    keepalive:
+      time: {{ otel_keepalive_time }}
+      timeout: {{ otel_keepalive_timeout }}
+      permit_without_stream: true
+
+  # Debug logging (optional)
+  debug:
+    verbosity: basic
+
+service:
+  pipelines:
+    metrics:
+      receivers:
+        - hostmetrics
+{% if otel_docker_metrics %}
+        - docker_stats
+{% endif %}
+      processors:
+        - memory_limiter
+        - resource
+        - batch
+      exporters:
+        - otlp
+
+{% if otel_logs_enabled or otel_docker_logs %}
+    logs:
+      receivers:
+{% if otel_logs_enabled %}
+        - filelog
+{% endif %}
+{% if otel_docker_logs %}
+        - filelog/docker
+{% endif %}
+      processors:
+        - memory_limiter
+        - resource
+{% if otel_headscale_log_parsing %}
+        - transform/headscale_parse
+{% endif %}
+        - batch
+      exporters:
+        - otlp
+{% endif %}
+
+  telemetry:
+    logs:
+      level: info

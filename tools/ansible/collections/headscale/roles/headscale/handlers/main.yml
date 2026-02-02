@@ -1,0 +1,36 @@
+---
+# Headscale role handlers
+
+- name: restart headscale
+  ansible.builtin.command:
+    cmd: docker compose restart headscale
+    chdir: /opt/headscale
+  listen: restart headscale
+  when: not ansible_check_mode
+
+- name: restart caddy
+  ansible.builtin.command:
+    cmd: docker compose restart caddy
+    chdir: /opt/headscale
+  listen: restart caddy
+  when: not ansible_check_mode
+
+- name: restart headplane
+  ansible.builtin.command:
+    cmd: docker compose restart headplane
+    chdir: /opt/headscale
+  listen: restart headplane
+  when: not ansible_check_mode
+
+- name: restart all
+  ansible.builtin.command:
+    cmd: docker compose up -d --force-recreate
+    chdir: /opt/headscale
+  listen: restart all
+  when: not ansible_check_mode
+
+- name: Reload systemd
+  ansible.builtin.systemd:
+    daemon_reload: true
+  listen: Reload systemd
+  when: not ansible_check_mode

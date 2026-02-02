@@ -1,0 +1,32 @@
+[Unit]
+Description=Headscale Subnet Router Registration and Route Approval
+After=docker.service tailscaled.service
+Requires=docker.service
+After=docker-headscale.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/opt/headscale
+Environment="HEADSCALE_DOMAIN={{ headscale_domain }}"
+Environment="ROUTER_HOSTNAME={{ headscale_router_hostname }}"
+Environment="ADVERTISE_ROUTES={{ headscale_advertise_routes | join(',') }}"
+Environment="ALL_ROUTES={{ (headscale_advertise_routes + ['0.0.0.0/0'] if headscale_exit_node_enabled | default(false) else headscale_advertise_routes) | join(',') }}"
+{% if headscale_exit_node_enabled | default(false) %}
+Environment="EXIT_NODE_FLAG=--advertise-exit-node"
+{% else %}
+Environment="EXIT_NODE_FLAG="
+{% endif %}
+
+# Wait for headscale to be ready
+ExecStartPre=/bin/sleep 10
+ExecStartPre=/bin/bash -c 'until docker compose exec -T headscale headscale nodes list &>/dev/null; do sleep 2; done'
+
+# Main script: check if router exists, create key if needed, register, and approve routes
+ExecStart=/opt/headscale/router-setup.sh
+
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

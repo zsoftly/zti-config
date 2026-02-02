@@ -1,0 +1,180 @@
+# Configure MFA Stages (TOTP, WebAuthn, Validation)
+# Supports: --check --diff for dry runs
+---
+
+# TOTP Authenticator Setup Stage
+- name: Get existing TOTP setup stages
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/stages/authenticator/totp/"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: existing_totp_stages
+  check_mode: false
+
+- name: Check if TOTP stage exists
+  ansible.builtin.set_fact:
+    totp_stage_exists: "{{ mfa_config.totp_stage.name in (existing_totp_stages.json.results | map(attribute='name') | list) }}"
+    existing_totp_pk: "{{ (existing_totp_stages.json.results | selectattr('name', 'equalto', mfa_config.totp_stage.name) | first).pk | default('') }}"
+
+- name: Show TOTP stage that would be created (check mode)
+  ansible.builtin.debug:
+    msg: "Would create TOTP stage: {{ mfa_config.totp_stage.name }}"
+  when: ansible_check_mode and not totp_stage_exists
+
+- name: Create TOTP setup stage
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/stages/authenticator/totp/"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      name: "{{ mfa_config.totp_stage.name }}"
+      friendly_name: "{{ mfa_config.totp_stage.friendly_name }}"
+      configure_flow: null
+      digits: "{{ mfa_config.totp_stage.digits }}"
+    status_code: [200, 201]
+  when:
+    - not ansible_check_mode
+    - not totp_stage_exists
+  register: created_totp_stage
+
+- name: Set TOTP stage PK
+  ansible.builtin.set_fact:
+    totp_stage_pk: "{{ created_totp_stage.json.pk | default(existing_totp_pk) }}"
+
+# WebAuthn Authenticator Setup Stage
+- name: Get existing WebAuthn setup stages
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/stages/authenticator/webauthn/"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: existing_webauthn_stages
+  check_mode: false
+
+- name: Check if WebAuthn stage exists
+  ansible.builtin.set_fact:
+    webauthn_stage_exists: "{{ mfa_config.webauthn_stage.name in (existing_webauthn_stages.json.results | map(attribute='name') | list) }}"
+    existing_webauthn_pk: "{{ (existing_webauthn_stages.json.results | selectattr('name', 'equalto', mfa_config.webauthn_stage.name) | first).pk | default('') }}"
+
+- name: Show WebAuthn stage that would be created (check mode)
+  ansible.builtin.debug:
+    msg: "Would create WebAuthn stage: {{ mfa_config.webauthn_stage.name }}"
+  when: ansible_check_mode and not webauthn_stage_exists
+
+- name: Create WebAuthn setup stage
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/stages/authenticator/webauthn/"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      name: "{{ mfa_config.webauthn_stage.name }}"
+      friendly_name: "{{ mfa_config.webauthn_stage.friendly_name }}"
+      configure_flow: null
+      resident_key_requirement: "{{ mfa_config.webauthn_stage.resident_key_requirement }}"
+      user_verification: "{{ mfa_config.webauthn_stage.user_verification }}"
+    status_code: [200, 201]
+  when:
+    - not ansible_check_mode
+    - not webauthn_stage_exists
+  register: created_webauthn_stage
+
+- name: Set WebAuthn stage PK
+  ansible.builtin.set_fact:
+    webauthn_stage_pk: "{{ created_webauthn_stage.json.pk | default(existing_webauthn_pk) }}"
+
+# Static Token (Recovery Codes) Stage - use default
+- name: Get default static authenticator stage
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/stages/authenticator/static/?name=default-authenticator-static-setup"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: default_static_stage
+  check_mode: false
+
+- name: Set static stage PK
+  ansible.builtin.set_fact:
+    static_stage_pk: "{{ default_static_stage.json.results[0].pk | default('') }}"
+  when: default_static_stage.json.results | length > 0
+
+# MFA Validation Stage
+- name: Get existing authenticator validation stages
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/stages/authenticator/validate/"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: existing_validation_stages
+  check_mode: false
+
+- name: Check if validation stage exists
+  ansible.builtin.set_fact:
+    validation_stage_exists: "{{ mfa_config.validation_stage.name in (existing_validation_stages.json.results | map(attribute='name') | list) }}"
+    existing_validation_pk: "{{ (existing_validation_stages.json.results | selectattr('name', 'equalto', mfa_config.validation_stage.name) | first).pk | default('') }}"
+
+- name: Show validation stage that would be created (check mode)
+  ansible.builtin.debug:
+    msg: "Would create MFA validation stage: {{ mfa_config.validation_stage.name }}"
+  when: ansible_check_mode and not validation_stage_exists
+
+- name: Create MFA validation stage
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/stages/authenticator/validate/"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      name: "{{ mfa_config.validation_stage.name }}"
+      device_classes: "{{ mfa_config.validation_stage.device_classes }}"
+      not_configured_action: "{{ mfa_config.validation_stage.not_configured_action }}"
+      last_auth_threshold: "{{ mfa_config.validation_stage.last_auth_threshold }}"
+      configuration_stages:
+        - "{{ totp_stage_pk }}"
+        - "{{ webauthn_stage_pk }}"
+    status_code: [200, 201]
+  when:
+    - not ansible_check_mode
+    - not validation_stage_exists
+  register: created_validation_stage
+
+- name: Update existing MFA validation stage
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/stages/authenticator/validate/{{ existing_validation_pk }}/"
+    method: PATCH
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      device_classes: "{{ mfa_config.validation_stage.device_classes }}"
+      not_configured_action: "{{ mfa_config.validation_stage.not_configured_action }}"
+      last_auth_threshold: "{{ mfa_config.validation_stage.last_auth_threshold }}"
+      configuration_stages:
+        - "{{ totp_stage_pk }}"
+        - "{{ webauthn_stage_pk }}"
+    status_code: [200]
+  when:
+    - not ansible_check_mode
+    - validation_stage_exists
+  register: updated_validation_stage
+
+- name: Set validation stage PK
+  ansible.builtin.set_fact:
+    validation_stage_pk: "{{ created_validation_stage.json.pk | default(existing_validation_pk) }}"
+
+- name: Display MFA stages status
+  ansible.builtin.debug:
+    msg: "MFA: totp={{ mfa_config.totp_stage.name }}, webauthn={{ mfa_config.webauthn_stage.name }}, validation={{ mfa_config.validation_stage.name }}"

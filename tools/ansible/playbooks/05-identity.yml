@@ -1,0 +1,35 @@
+---
+# 05-identity.yml
+# Identity Provider: Configure Authentik IdP
+# Dependencies:
+#   - 01-base-security.yml (Wazuh agent recommended)
+#   - 04-vpn-mesh.yml (Network connectivity required)
+# Run: ansible-playbook tools/ansible/playbooks/05-identity.yml -i inventory/hosts.yml
+#
+# For complete Authentik configuration, see:
+#   tools/ansible/collections/authentik/playbooks/configure-all.yml
+
+- name: Configure Authentik Identity Provider
+  hosts: authentik
+  become: false  # Authentik uses API, no sudo needed
+
+  tasks:
+    - name: Include Authentik configuration playbook
+      ansible.builtin.import_playbook: ../collections/authentik/playbooks/configure-all.yml
+      tags: [authentik, identity, sso]
+
+  post_tasks:
+    - name: Display Authentik info
+      ansible.builtin.debug:
+        msg: |
+          Authentik configuration complete.
+
+          Available configurations:
+          - Groups: collections/authentik/playbooks/configure-groups.yml
+          - OIDC: collections/authentik/playbooks/configure-oidc.yml
+          - LDAP: collections/authentik/playbooks/configure-ldap.yml
+          - Security: collections/authentik/playbooks/configure-security.yml
+          - Google OAuth: collections/authentik/playbooks/configure-google-oauth.yml
+
+          See collections/authentik/README.md for details
+      tags: [info]

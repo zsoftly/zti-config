@@ -1,0 +1,29 @@
+---
+# 03-monitoring.yml
+# Monitoring: Install SigNoz OpenTelemetry collector
+# Dependencies: None
+# Run: ansible-playbook tools/ansible/playbooks/03-monitoring.yml -i inventory/hosts.yml
+
+- name: Install SigNoz OpenTelemetry Collector
+  hosts: monitoring
+  become: true
+
+  roles:
+    - role: signoz_otel_collector
+      tags: [monitoring, observability]
+
+  post_tasks:
+    - name: Verify OTEL collector is running
+      ansible.builtin.systemd:
+        name: otel-collector
+        state: started
+        enabled: true
+      check_mode: true
+      register: otel_status
+      tags: [verify]
+
+    - name: Display OTEL collector status
+      ansible.builtin.debug:
+        msg: "OTEL collector is {{ otel_status.status.ActiveState }}"
+      when: otel_status is defined
+      tags: [verify]

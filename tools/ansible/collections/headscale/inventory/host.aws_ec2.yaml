@@ -1,0 +1,40 @@
+plugin: amazon.aws.aws_ec2
+
+regions:
+  - ca-central-1
+
+aws_profile: "{{ lookup('env', 'AWS_PROFILE') }}"
+
+filters:
+  instance-state-name: running
+  "tag:Component": headscale
+
+strict: false
+
+# Use Name tag as hostname (more readable than instance-id)
+hostnames:
+  - tag:Name
+  - instance-id
+
+# Simple grouping
+keyed_groups:
+  - key: tags.Environment
+    prefix: ""
+    separator: ""
+
+# Compose clean variables
+compose:
+  # Connection settings
+  ansible_host: instance_id
+  ansible_connection: '"amazon.aws.aws_ssm"'
+  ansible_aws_ssm_bucket_name: '"example-ansible-bucket"'
+  ansible_aws_ssm_region: '"ca-central-1"'
+  # Useful host info
+  public_ip: public_ip_address
+  private_ip: private_ip_address
+  ipv6: ipv6_address
+  instance_type: instance_type
+  az: placement.availability_zone
+
+# Only include essential hostvars
+use_extra_vars: true

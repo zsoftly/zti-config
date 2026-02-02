@@ -1,0 +1,85 @@
+---
+# Wazuh Agent Installation Playbook (Standalone)
+#
+# Prerequisites:
+#   export HEADSCALE_ANSIBLE_VAULT_PASS="your-vault-password"
+#
+# Usage:
+#   ansible-playbook playbooks/wazuh-install.yml
+#
+# This playbook installs ONLY the Wazuh agent.
+# For full installation, use headscale-install.yml instead.
+
+- name: Install Wazuh Agent on Headscale VPN Server
+  hosts: all
+  become: true
+  gather_facts: true
+
+  vars_files:
+    - ../vars/headscale.yml
+    - ../vars/vault.yml
+
+  vars:
+    wazuh_agent_group: "aws,vpn,ubuntu,arm"
+
+  pre_tasks:
+    - name: Display deployment information
+      ansible.builtin.pause:
+        seconds: 0
+        prompt: |
+
+          ================================================================================
+                            WAZUH AGENT INSTALLATION
+          ================================================================================
+
+          Target:          {{ inventory_hostname }}
+          Wazuh Manager:   wazuh.example.com
+          Environment:     {{ headscale_environment | default('sbx') }}
+
+          Security Monitoring:
+            - File Integrity Monitoring (FIM)
+            - Rootkit Detection
+            - Security Configuration Assessment (SCA)
+            - Vulnerability Detection
+            - System Inventory Collection
+
+          Custom Log Monitoring:
+            - /var/log/headscale/*.log
+
+          ================================================================================
+      tags: [always]
+
+  roles:
+    - wazuh_agent
+
+  post_tasks:
+    - name: Display agent status
+      ansible.builtin.pause:
+        seconds: 0
+        prompt: |
+
+          ================================================================================
+                            INSTALLATION COMPLETE
+          ================================================================================
+
+          Wazuh agent installed and connected to manager.
+
+          Verification:
+            1. Check agent status:
+               systemctl status wazuh-agent
+
+            2. Verify connection:
+               grep "Connected to" /var/ossec/logs/ossec.log
+
+            3. Check in Wazuh dashboard:
+               https://wazuh.example.com
+               Navigate to: Agents -> Agents Management
+               Find agent: {{ inventory_hostname }}
+
+          Troubleshooting:
+            - Agent logs: tail -f /var/ossec/logs/ossec.log
+            - Configuration: /var/ossec/etc/ossec.conf
+            - Enrollment key: cat /var/ossec/etc/client.keys
+
+          ================================================================================
+      tags: [always]

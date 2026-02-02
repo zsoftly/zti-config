@@ -1,0 +1,87 @@
+# OIDC Provider Configurations
+# Apps that support native OIDC authentication
+#
+# Options:
+#   client_type: public - PKCE-only client (no secret); default: confidential
+#   show_in_library: false - hides app from Authentik library
+#   launch_url: "https://app.example.com" - URL when clicking app in library
+#   groups: [] - restrict access to specific groups
+#   allowed_domain: "@example.com" - restrict access to email domain
+#   extra_scopes: ["offline_access"] - add scopes beyond openid/email/profile
+#   use_verified_email: true - use custom email scope returning email_verified: true
+#                              (required for apps like Vaultwarden that check email_verified claim)
+
+oidc_providers:
+  - name: zammad-oidc
+    app_name: Zammad Helpdesk
+    app_slug: zammad
+    icon: "zammad.png"
+    client_type: public  # Zammad OIDC only supports public clients (PKCE)
+    redirect_uris:
+      - url: "https://app.example.com/auth/openid_connect/callback"
+        matching_mode: "strict"
+    show_in_library: true
+    launch_url: "https://app.example.com"
+    groups:
+      - app-zammad-admin
+      - app-zammad-agent
+    allowed_domain: "@example.com"  # Only example.com emails can access
+    # Public client - no secret stored in AWS Secrets Manager
+    # Configure in Zammad UI: Settings > Security > Third Party > OpenID Connect
+    #   Identifier: <client_id from Authentik>
+    #   Issuer: https://auth.example.com/application/o/zammad/
+
+  - name: headscale-oidc
+    app_name: Headscale VPN
+    app_slug: headscale
+    redirect_uris:
+      - url: "https://vpn.example.com/oidc/callback"
+        matching_mode: "strict"
+    show_in_library: false  # Hide from library - VPN client handles login
+    # Client ID/Secret stored in: example/secrets/headscale
+    # Issuer URL: https://auth.example.com/application/o/headscale/
+
+  - name: headplane-oidc
+    app_name: Headplane Admin
+    app_slug: headplane
+    icon: "headscale.svg"
+    redirect_uris:
+      - url: "https://vpn.example.com/admin/oidc/callback"
+        matching_mode: "strict"
+    show_in_library: true
+    launch_url: "https://vpn.example.com/admin/login"
+    groups:
+      - admins  # Only admins can access VPN admin panel
+    # Client ID/Secret stored in: example/secrets/headplane
+    # Issuer URL: https://auth.example.com/application/o/headplane/
+
+  - name: vaultwarden-oidc
+    app_name: Vaultwarden
+    app_slug: vaultwarden
+    icon: "vaultwarden.png"
+    redirect_uris:
+      - url: "https://app.example.com/identity/connect/oidc-signin"
+        matching_mode: "strict"
+    show_in_library: true
+    launch_url: "https://app.example.com"
+    allowed_domain: "@example.com"  # Restrict to example.com emails only
+    use_verified_email: true  # Required: Vaultwarden needs email_verified: true claim
+    extra_scopes:
+      - "offline_access"  # Required for Vaultwarden SSO
+    # Client ID/Secret stored in: example/secrets/vaultwarden-oidc
+    # Issuer URL: https://auth.example.com/application/o/vaultwarden/
+
+  - name: wikijs-oidc
+    app_name: Wiki.js
+    app_slug: wikijs
+    icon: "wikijs.png"
+    redirect_uris:
+      # Wiki.js generates dynamic strategy IDs, use regex to match any UUID
+      - url: "https://app.example.com/login/[0-9a-f-]+/callback"
+        matching_mode: "regex"
+    show_in_library: true
+    launch_url: "https://app.example.com"
+    allowed_domain: "@example.com"  # Restrict to example.com emails only
+    # Client ID/Secret: Get from Authentik API (not stored in Secrets Manager)
+    # Issuer URL: https://auth.example.com/application/o/wikijs/
+    # Configure in Wiki.js: See docs/wikijs-oidc-setup.md

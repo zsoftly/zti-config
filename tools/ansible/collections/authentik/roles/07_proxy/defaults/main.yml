@@ -1,0 +1,29 @@
+# Proxy Provider Configurations (ForwardAuth)
+# These protect apps at the Traefik ingress level via Authentik
+# mode: forward_single (per-app) or forward_domain (wildcard)
+#
+# Options:
+#   show_in_library: false - hides app from Authentik library (set meta_launch_url to blank://blank)
+#   groups: [] - restrict access to specific groups (creates policy binding)
+#   icon: Local icon filename from files/icons/ (uploaded to Authentik)
+#
+# Note: SigNoz removed - uses native Google OAuth SSO (v0.85.0+)
+# Note: n8n removed - Community edition doesn't support SSO, uses built-in auth
+---
+proxy_providers:
+  - name: sonarqube-proxy
+    app_name: SonarQube Code Quality
+    app_slug: sonarqube-proxy
+    icon: "sonarqube.svg"
+    external_host: "https://app.example.com"
+    mode: forward_single
+    show_in_library: true
+    groups:
+      - app-sonarqube-admin
+      - app-sonarqube-developer
+      - app-sonarqube-readonly
+    # Traefik middleware: authentik-forward-auth (in sonarqube namespace)
+
+  # Note: Wazuh moved to SAML (10_saml role) - proxy forward-auth doesn't provide true SSO
+  # for OpenSearch-based dashboards. SAML enables single login without Wazuh's native login page.
+

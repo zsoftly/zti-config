@@ -1,0 +1,639 @@
+---
+# Headscale application role - deploy and start containers
+
+# Force recreate block - runs when headscale_force_recreate is true
+- name: Stop existing containers (force recreate)
+  ansible.builtin.command:
+    cmd: docker compose down -v
+    chdir: /opt/headscale
+  register: down_result
+  changed_when: "'Removed' in down_result.stdout or 'Stopping' in down_result.stdout"
+  failed_when: false
+  when:
+    - headscale_force_recreate | default(false) | bool
+    - not ansible_check_mode
+
+- name: Remove existing config (force recreate)
+  ansible.builtin.file:
+    path: /opt/headscale/config
+    state: absent
+  when: headscale_force_recreate | default(false) | bool
+
+# Standard deployment
+- name: Create Headscale directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0750"
+  loop:
+    - /opt/headscale
+    - /opt/headscale/config
+
+- name: Deploy Headscale configuration
+  ansible.builtin.template:
+    src: headscale.yaml.j2
+    dest: /opt/headscale/config/config.yaml
+    mode: "0640"
+  notify: restart headscale
+  tags: [config]
+
+- name: Deploy ACL policy
+  ansible.builtin.template:
+    src: acl.json.j2
+    dest: /opt/headscale/config/acl.json
+    mode: "0640"
+  notify: restart headscale
+  tags: [config]
+
+- name: Deploy Headplane configuration
+  ansible.builtin.template:
+    src: headplane.yaml.j2
+    dest: /opt/headscale/config/headplane.yaml
+    mode: "0640"
+  notify: restart headplane
+  when: headplane_enabled | default(true) | bool
+  tags: [config]
+
+- name: Create Docker Compose file
+  ansible.builtin.template:
+    src: docker-compose.yml.j2
+    dest: /opt/headscale/docker-compose.yml
+    mode: "0640"
+  notify: restart all
+  tags: [config]
+
+- name: Create Caddyfile
+  ansible.builtin.template:
+    src: Caddyfile.j2
+    dest: /opt/headscale/Caddyfile
+    mode: "0640"
+  register: caddyfile_result
+  tags: [config, caddy]
+
+- name: Check Caddy container status
+  ansible.builtin.command:
+    cmd: docker compose ps caddy --format "{{ '{{' }}.State}}"
+    chdir: /opt/headscale
+  register: caddy_status
+  changed_when: false
+  failed_when: false
+  tags: [caddy]
+
+- name: Restart Caddy (config changed or not running)
+  ansible.builtin.shell: |
+    docker compose down caddy
+    docker compose up -d caddy
+  args:
+    chdir: /opt/headscale
+  when: caddyfile_result.changed or ('running' not in (caddy_status.stdout | default('')))
+  register: caddy_restart
+  changed_when: caddy_restart.rc == 0
+  tags: [caddy]
+
+- name: Wait for Caddy to start
+  ansible.builtin.pause:
+    seconds: 5
+  when: caddy_restart.changed | default(false)
+  tags: [caddy]
+
+- name: Check Caddy TLS status
+  ansible.builtin.command:
+    cmd: docker compose logs caddy --tail=20
+    chdir: /opt/headscale
+  register: caddy_logs
+  changed_when: false
+  when: caddy_restart.changed | default(false)
+  tags: [caddy]
+
+- name: TLS certificate status
+  ansible.builtin.debug:
+    msg: "{{ 'TLS certificate obtained successfully' if 'certificate obtained successfully' in (caddy_logs.stdout | default('')) else 'TLS certificate pending or already valid' }}"
+  when: caddy_restart.changed | default(false)
+  tags: [caddy]
+
+# Docker operations - skip in check mode
+- name: Pull Docker images
+  ansible.builtin.command:
+    cmd: docker compose pull
+    chdir: /opt/headscale
+  register: pull_result
+  changed_when: "'Pull complete' in pull_result.stdout or 'Downloaded' in pull_result.stdout"
+  check_mode: false
+  when: not ansible_check_mode
+  tags: [deploy]
+
+- name: Start Headscale containers
+  ansible.builtin.command:
+    cmd: docker compose up -d --remove-orphans
+    chdir: /opt/headscale
+  register: compose_result
+  changed_when: "'Started' in compose_result.stdout or 'Creating' in compose_result.stdout or 'Removed' in compose_result.stderr"
+  check_mode: false
+  when: not ansible_check_mode
+  tags: [deploy]
+
+- name: Prune unused Docker images
+  ansible.builtin.command:
+    cmd: docker image prune -af
+  register: prune_result
+  changed_when: "'Total reclaimed space' in prune_result.stdout and 'Total reclaimed space: 0B' not in prune_result.stdout"
+  when: not ansible_check_mode
+  tags: [deploy]
+
+- name: Prune unused Docker volumes
+  ansible.builtin.command:
+    cmd: docker volume prune -f
+  register: volume_prune
+  changed_when: "'Total reclaimed space' in volume_prune.stdout and 'Total reclaimed space: 0B' not in volume_prune.stdout"
+  when: not ansible_check_mode
+  tags: [deploy]
+
+# Deterministic health checks
+- name: Wait for containers to start (10s)
+  ansible.builtin.pause:
+    seconds: 10
+  when: not ansible_check_mode
+
+- name: Check container status
+  ansible.builtin.command:
+    cmd: docker compose ps --format "{{ '{{' }}.Name}}:{{ '{{' }}.State}}"
+    chdir: /opt/headscale
+  register: container_status
+  changed_when: false
+  check_mode: false
+  when: not ansible_check_mode
+
+- name: Count running containers
+  ansible.builtin.set_fact:
+    running_count: "{{ container_status.stdout_lines | select('search', ':running') | list | length }}"
+    container_list: "{{ container_status.stdout_lines }}"
+  when: not ansible_check_mode
+
+- name: Show container status if not all running
+  ansible.builtin.debug:
+    msg: "Container status: {{ container_list }}"
+  when:
+    - not ansible_check_mode
+    - (running_count | int) < 3
+
+- name: Get Headscale container logs if unhealthy
+  ansible.builtin.command:
+    cmd: docker compose logs headscale --tail 50
+    chdir: /opt/headscale
+  register: headscale_logs
+  changed_when: false
+  check_mode: false
+  when:
+    - not ansible_check_mode
+    - (running_count | int) < 3
+
+- name: Show Headscale logs if unhealthy
+  ansible.builtin.debug:
+    msg: "{{ headscale_logs.stdout_lines | default([]) }}"
+  when:
+    - not ansible_check_mode
+    - (running_count | int) < 3
+    - headscale_logs.stdout_lines | default([]) | length > 0
+
+- name: Fail if containers not running
+  ansible.builtin.fail:
+    msg: "Only {{ running_count }}/3 containers running. Check logs above."
+  when:
+    - not ansible_check_mode
+    - (running_count | int) < 3
+
+- name: Wait for Headscale health endpoint
+  ansible.builtin.uri:
+    url: "http://localhost:8080/health"
+    method: GET
+    status_code: [200]
+    return_content: true
+  register: health_check
+  until: health_check.status == 200
+  retries: 12
+  delay: 5
+  check_mode: false
+  when: not ansible_check_mode
+
+- name: Verify Headscale health response
+  ansible.builtin.assert:
+    that:
+      - "'pass' in health_check.content"
+    fail_msg: "Headscale health check failed: {{ health_check.content }}"
+  when: not ansible_check_mode
+
+- name: Show check mode notice
+  ansible.builtin.debug:
+    msg: "Skipping Docker operations in check mode (pull, start, health check)"
+  when: ansible_check_mode
+
+# =============================================================================
+# Initial Setup - Create default user and preauth key
+# =============================================================================
+- name: Check if default user exists
+  ansible.builtin.command:
+    cmd: docker compose exec -T headscale headscale users list -o json
+    chdir: /opt/headscale
+  register: users_list
+  changed_when: false
+  when: not ansible_check_mode
+
+- name: Parse users list
+  ansible.builtin.set_fact:
+    # Handle both list format and dict format (headscale version differences)
+    headscale_users_raw: "{{ users_list.stdout | from_json }}"
+  when: not ansible_check_mode
+
+- name: Normalize users list
+  ansible.builtin.set_fact:
+    # If it's a dict with 'users' key, extract it; otherwise use as-is
+    headscale_users: "{{ headscale_users_raw.users | default(headscale_users_raw) if headscale_users_raw is mapping else headscale_users_raw }}"
+  when: not ansible_check_mode
+
+- name: Extract user names (some users may not have name attribute)
+  ansible.builtin.set_fact:
+    headscale_user_names: "{{ headscale_users | selectattr('name', 'defined') | map(attribute='name') | list }}"
+  when: not ansible_check_mode
+
+- name: Create default user
+  ansible.builtin.command:
+    cmd: docker compose exec -T headscale headscale users create {{ headscale_default_user | default('default') }}
+    chdir: /opt/headscale
+  register: create_user
+  changed_when: create_user.rc == 0
+  failed_when: false
+  when:
+    - not ansible_check_mode
+    - headscale_default_user | default('default') not in headscale_user_names
+
+- name: Refresh users list after create
+  ansible.builtin.command:
+    cmd: docker compose exec -T headscale headscale users list -o json
+    chdir: /opt/headscale
+  register: users_list_refresh
+  changed_when: false
+  when:
+    - not ansible_check_mode
+    - create_user is changed
+
+- name: Update users list
+  ansible.builtin.set_fact:
+    headscale_users_raw: "{{ users_list_refresh.stdout | from_json }}"
+  when:
+    - not ansible_check_mode
+    - create_user is changed
+
+- name: Normalize updated users list
+  ansible.builtin.set_fact:
+    headscale_users: "{{ headscale_users_raw.users | default(headscale_users_raw) if headscale_users_raw is mapping else headscale_users_raw }}"
+  when:
+    - not ansible_check_mode
+    - create_user is changed
+
+# =============================================================================
+# Legacy preauth key creation removed - Zero Trust model
+# Use playbooks/generate-key.yml to create keys with role tags
+# =============================================================================
+
+# =============================================================================
+# Subnet Router - Advertise VPC + Cloudflare routes for split tunneling
+# =============================================================================
+# This makes the Headscale server act as a subnet router, advertising routes
+# so VPN clients only route specific traffic through VPN (not everything)
+
+- name: Check if Tailscale is installed
+  ansible.builtin.command:
+    cmd: which tailscale
+  register: tailscale_installed
+  changed_when: false
+  failed_when: false
+  when: not ansible_check_mode
+
+- name: Install Tailscale client (for subnet routing)
+  ansible.builtin.shell: |
+    curl -fsSL https://tailscale.com/install.sh | sh
+  args:
+    creates: /usr/bin/tailscale
+  when:
+    - not ansible_check_mode
+    - tailscale_installed.rc != 0
+
+- name: Ensure tailscaled service is running
+  ansible.builtin.systemd:
+    name: tailscaled
+    state: started
+    enabled: true
+  when: not ansible_check_mode
+
+- name: Check Tailscale status
+  ansible.builtin.command:
+    cmd: tailscale status --json
+  register: tailscale_status
+  changed_when: false
+  failed_when: false
+  when: not ansible_check_mode
+
+- name: Parse Tailscale status
+  ansible.builtin.set_fact:
+    tailscale_backend_state: "{{ (tailscale_status.stdout | from_json).BackendState | default('Unknown') }}"
+  when:
+    - not ansible_check_mode
+    - tailscale_status.rc == 0
+    - tailscale_status.stdout | length > 2
+
+- name: Set Tailscale as not connected
+  ansible.builtin.set_fact:
+    tailscale_backend_state: "NeedsLogin"
+  when:
+    - not ansible_check_mode
+    - tailscale_status.rc != 0 or tailscale_status.stdout | default('') | length < 3
+
+- name: Debug Tailscale state
+  ansible.builtin.debug:
+    msg: "Tailscale BackendState: {{ tailscale_backend_state }}"
+  when: not ansible_check_mode
+
+- name: Create subnet router preauth key
+  ansible.builtin.command:
+    cmd: docker compose exec -T headscale headscale preauthkeys create --user {{ default_user_id }} --reusable --expiration 365d -o json
+    chdir: /opt/headscale
+  register: router_key
+  changed_when: false
+  when:
+    - not ansible_check_mode
+    - tailscale_backend_state != 'Running'
+
+- name: Connect Tailscale as subnet router (new registration)
+  ansible.builtin.command:
+    cmd: >
+      tailscale up
+      --login-server=https://{{ headscale_domain }}
+      --authkey={{ (router_key.stdout | from_json).key }}
+      --advertise-routes={{ headscale_advertise_routes | join(',') }}
+      --accept-routes=false
+      --hostname={{ headscale_router_hostname }}
+      --advertise-tags=tag:subnet-router{{ ',tag:exit-node' if headscale_exit_node_enabled | default(false) else '' }}
+      {{ '--advertise-exit-node' if headscale_exit_node_enabled | default(false) else '' }}
+  when:
+    - not ansible_check_mode
+    - tailscale_backend_state != 'Running'
+    - router_key.stdout is defined
+  register: tailscale_connect
+
+- name: Update Tailscale config (already running)
+  ansible.builtin.command:
+    cmd: >
+      tailscale up
+      --reset
+      --login-server=https://{{ headscale_domain }}
+      --advertise-routes={{ headscale_advertise_routes | join(',') }}
+      --accept-routes=false
+      --hostname={{ headscale_router_hostname }}
+      --advertise-tags=tag:subnet-router{{ ',tag:exit-node' if headscale_exit_node_enabled | default(false) else '' }}
+      {{ '--advertise-exit-node' if headscale_exit_node_enabled | default(false) else '' }}
+  when:
+    - not ansible_check_mode
+    - tailscale_backend_state == 'Running'
+  register: tailscale_update
+  changed_when: tailscale_update.rc == 0
+
+- name: Wait for node registration
+  ansible.builtin.pause:
+    seconds: 5
+  when: tailscale_connect is changed or tailscale_update is changed
+
+- name: Get router node ID
+  ansible.builtin.command:
+    cmd: docker compose exec -T headscale headscale nodes list -o json
+    chdir: /opt/headscale
+  register: nodes_list
+  changed_when: false
+  when: not ansible_check_mode
+  tags:
+    - deploy
+    - routes
+
+- name: Find router node
+  ansible.builtin.set_fact:
+    router_node: "{{ (nodes_list.stdout | from_json) | selectattr('given_name', 'defined') | selectattr('given_name', 'equalto', headscale_router_hostname) | first | default({}) }}"
+  when: not ansible_check_mode
+  tags:
+    - deploy
+    - routes
+
+# Headscale 0.27.x: Routes are approved via 'nodes approve-routes' command
+# The advertised routes need to be approved for the subnet router to work
+- name: Build initial routes list (subnet routes + exit node if enabled)
+  ansible.builtin.set_fact:
+    initial_routes: "{{ headscale_advertise_routes + ['0.0.0.0/0'] if headscale_exit_node_enabled | default(false) else headscale_advertise_routes }}"
+  when:
+    - not ansible_check_mode
+    - router_node.id is defined
+  tags:
+    - deploy
+    - routes
+
+- name: Approve all advertised routes for subnet router (includes exit node if enabled)
+  ansible.builtin.command:
+    cmd: >
+      docker compose exec -T headscale headscale nodes approve-routes
+      --identifier {{ router_node.id }}
+      --routes {{ initial_routes | join(',') }}
+    chdir: /opt/headscale
+  when:
+    - not ansible_check_mode
+    - router_node.id is defined
+  register: routes_approved
+  changed_when: routes_approved.rc == 0
+  failed_when: false
+  tags:
+    - deploy
+    - routes
+
+# Always verify and re-approve routes at the end (idempotent)
+- name: Final check - Get all nodes
+  ansible.builtin.command:
+    cmd: docker compose exec -T headscale headscale nodes list -o json
+    chdir: /opt/headscale
+  register: final_nodes_list
+  changed_when: false
+  when: not ansible_check_mode
+  tags:
+    - deploy
+    - routes
+
+- name: Final check - Find subnet router node
+  ansible.builtin.set_fact:
+    final_router_node: "{{ (final_nodes_list.stdout | from_json) | selectattr('given_name', 'defined') | selectattr('given_name', 'equalto', headscale_router_hostname) | first | default({}) }}"
+  when:
+    - not ansible_check_mode
+    - final_nodes_list.stdout is defined
+  tags:
+    - deploy
+    - routes
+
+- name: Final check - Debug router node
+  ansible.builtin.debug:
+    msg: "Router node ID: {{ final_router_node.id | default('NOT FOUND') }}"
+  when: not ansible_check_mode
+  tags:
+    - deploy
+    - routes
+
+- name: Build complete routes list (subnet routes + exit node if enabled)
+  ansible.builtin.set_fact:
+    all_routes: "{{ headscale_advertise_routes + ['0.0.0.0/0'] if headscale_exit_node_enabled | default(false) else headscale_advertise_routes }}"
+  when:
+    - not ansible_check_mode
+    - final_router_node.id is defined
+  tags:
+    - deploy
+    - routes
+
+- name: Final check - Approve all routes (subnet + exit node)
+  ansible.builtin.command:
+    cmd: >
+      docker compose exec -T headscale headscale nodes approve-routes
+      --identifier {{ final_router_node.id }}
+      --routes {{ all_routes | join(',') }}
+    chdir: /opt/headscale
+  when:
+    - not ansible_check_mode
+    - final_router_node.id is defined
+  register: final_routes_approved
+  changed_when: "'approved' in (final_routes_approved.stdout | default('')) or final_routes_approved.rc == 0"
+  failed_when: false
+  tags:
+    - deploy
+    - routes
+
+- name: List routes (verification)
+  ansible.builtin.shell:
+    cmd: docker compose exec -T headscale headscale nodes list-routes | sed 's/\x1b\[[0-9;]*m//g'
+    chdir: /opt/headscale
+  register: routes_list
+  changed_when: false
+  when: not ansible_check_mode
+  tags:
+    - deploy
+    - routes
+
+- name: Routes status
+  ansible.builtin.debug:
+    msg: "{{ headscale_router_hostname }}: {{ (headscale_advertise_routes | length) }} routes approved ({{ headscale_cloudflare_ipv4 | length }} Cloudflare + {{ headscale_cloudflare_ipv6 | length }} IPv6 + 1 VPC)"
+  when: not ansible_check_mode
+  tags:
+    - deploy
+    - routes
+
+- name: Verify exit node routes are approved
+  ansible.builtin.set_fact:
+    exit_node_approved: "{{ '0.0.0.0/0' in routes_list.stdout }}"
+  when:
+    - not ansible_check_mode
+    - headscale_exit_node_enabled | default(false)
+  tags:
+    - deploy
+    - routes
+
+- name: Display exit node status
+  ansible.builtin.debug:
+    msg: "Exit node routes (0.0.0.0/0, ::/0 auto-approved): {{ 'APPROVED ✓' if exit_node_approved | default(false) else 'NOT APPROVED ✗' }}"
+  when:
+    - not ansible_check_mode
+    - headscale_exit_node_enabled | default(false)
+  tags:
+    - deploy
+    - routes
+
+- name: Restart Tailscale on router to re-advertise approved routes
+  ansible.builtin.systemd:
+    name: tailscaled
+    state: restarted
+  when:
+    - not ansible_check_mode
+    - final_routes_approved is defined
+    - final_routes_approved is changed
+  tags:
+    - deploy
+    - routes
+  register: tailscaled_restarted
+
+- name: Wait for Tailscale to reconnect after restart
+  ansible.builtin.pause:
+    seconds: 5
+  when:
+    - not ansible_check_mode
+    - tailscaled_restarted is changed
+
+- name: Re-advertise routes after tailscaled restart
+  ansible.builtin.command:
+    cmd: >
+      tailscale up
+      --reset
+      --login-server=https://{{ headscale_domain }}
+      --advertise-routes={{ headscale_advertise_routes | join(',') }}
+      --accept-routes=false
+      --hostname={{ headscale_router_hostname }}
+      --advertise-tags=tag:subnet-router{{ ',tag:exit-node' if headscale_exit_node_enabled | default(false) else '' }}
+      {{ '--advertise-exit-node' if headscale_exit_node_enabled | default(false) else '' }}
+  when:
+    - not ansible_check_mode
+    - tailscaled_restarted is changed
+  tags:
+    - deploy
+    - routes
+  register: tailscale_readvertise
+  changed_when: tailscale_readvertise.rc == 0
+
+# =============================================================================
+# Systemd Service - Auto-approve routes after reboot
+# =============================================================================
+- name: Deploy router setup script
+  ansible.builtin.template:
+    src: router-setup.sh.j2
+    dest: /opt/headscale/router-setup.sh
+    mode: '0755'
+  tags:
+    - config
+    - systemd
+
+- name: Deploy systemd service for route auto-approval
+  ansible.builtin.template:
+    src: headscale-routes.service.j2
+    dest: /etc/systemd/system/headscale-routes.service
+    mode: '0644'
+  notify: Reload systemd
+  tags:
+    - config
+    - systemd
+
+- name: Enable headscale-routes service
+  ansible.builtin.systemd:
+    name: headscale-routes
+    enabled: true
+    daemon_reload: true
+  tags:
+    - deploy
+    - systemd
+
+- name: Display connection info
+  ansible.builtin.debug:
+    msg: |
+      ══════════════════════════════════════════════════════════════════
+      HEADSCALE VPN READY (Zero Trust)
+      ══════════════════════════════════════════════════════════════════
+
+      Server:   https://{{ headscale_domain }}
+      Admin:    https://{{ headscale_domain }}/admin
+
+      Generate keys with role tags:
+        ansible-playbook playbooks/generate-key.yml -e user=<name> -e role=<adm|eng|ops>
+
+      Split Tunnel Routes:
+        - AWS VPC: {{ aws_vpc_cidr }}
+        - Cloudflare: {{ headscale_cloudflare_ipv4 | length }} IPv4 ranges
+
+      See docs/NETWORK-SEGMENTATION.md for access matrix
+      ══════════════════════════════════════════════════════════════════
+  when: not ansible_check_mode

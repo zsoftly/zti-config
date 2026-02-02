@@ -1,0 +1,336 @@
+# Create Proxy Providers for ForwardAuth
+# Supports: --check --diff for dry runs
+---
+- name: Get existing proxy providers
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/providers/proxy/"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: existing_providers
+  check_mode: false
+
+- name: Get default authorization flow
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/flows/instances/?slug=default-provider-authorization-implicit-consent"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: auth_flow
+  check_mode: false
+
+- name: Get default invalidation flow
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/flows/instances/?slug=default-provider-invalidation-flow"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: invalidation_flow
+  check_mode: false
+
+- name: Get existing provider names
+  ansible.builtin.set_fact:
+    existing_provider_names: "{{ existing_providers.json.results | map(attribute='name') | list }}"
+
+- name: Show providers that would be created (check mode)
+  ansible.builtin.debug:
+    msg: "Would create proxy provider: {{ item.name }} ({{ item.mode }})"
+  loop: "{{ proxy_providers }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when:
+    - ansible_check_mode
+    - item.name not in existing_provider_names
+
+- name: Create proxy providers
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/providers/proxy/"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      name: "{{ item.name }}"
+      authorization_flow: "{{ auth_flow.json.results[0].pk }}"
+      invalidation_flow: "{{ invalidation_flow.json.results[0].pk }}"
+      external_host: "{{ item.external_host }}"
+      mode: "{{ item.mode }}"
+    status_code: [200, 201]
+  loop: "{{ proxy_providers }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when:
+    - not ansible_check_mode
+    - item.name not in existing_provider_names
+  register: created_providers
+
+- name: Refresh providers list
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/providers/proxy/"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: all_providers
+  check_mode: false
+
+- name: Get existing applications
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/core/applications/?page_size=500"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: existing_apps
+  check_mode: false
+
+- name: Build existing app slugs list
+  ansible.builtin.set_fact:
+    existing_app_slugs: "{{ existing_apps.json.results | map(attribute='slug') | list }}"
+
+- name: Create applications for proxy providers
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/core/applications/"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body: >-
+      {{
+        {
+          'name': item.app_name,
+          'slug': item.app_slug,
+          'provider': (all_providers.json.results | selectattr('name', 'equalto', item.name) | first).pk,
+          'policy_engine_mode': 'any',
+          'open_in_new_tab': true
+        }
+        | combine({'meta_launch_url': 'blank://blank'} if (item.show_in_library is defined and not item.show_in_library) else {})
+      }}
+    status_code: [200, 201, 400]
+  loop: "{{ proxy_providers }}"
+  loop_control:
+    label: "{{ item.app_slug }}"
+  when:
+    - not ansible_check_mode
+    - item.app_slug not in existing_app_slugs
+  register: created_apps
+  changed_when: created_apps.status in [200, 201]
+  failed_when: created_apps.status == 400 and 'already exists' not in (created_apps.json | default({}) | string)
+
+# Update existing applications with visibility settings
+- name: Update application visibility settings
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/core/applications/{{ item.app_slug }}/"
+    method: PATCH
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      meta_launch_url: "{{ 'blank://blank' if (item.show_in_library is defined and not item.show_in_library) else '' }}"
+      open_in_new_tab: true
+    status_code: [200]
+  loop: "{{ proxy_providers }}"
+  loop_control:
+    label: "{{ item.app_slug }}"
+  when:
+    - not ansible_check_mode
+    - item.app_slug in (existing_apps.json.results | map(attribute='slug') | list)
+
+# Refresh applications list after create/update
+- name: Refresh applications list
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/core/applications/?page_size=500"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: refreshed_apps
+  check_mode: false
+
+# Upload application icons using shared task
+- name: Upload proxy icons
+  ansible.builtin.include_tasks: ../../common/tasks/upload_icons.yml
+  vars:
+    icon_items: "{{ proxy_providers }}"
+    icon_slug_attr: "app_slug"
+    icon_apps_list: "{{ refreshed_apps }}"
+
+# Group-based access control via policy bindings
+- name: Get existing policy bindings
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/policies/bindings/"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: existing_bindings
+  check_mode: false
+
+- name: Get existing expression policies
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/policies/expression/"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: existing_policies
+  check_mode: false
+
+# Cleanup orphaned policy bindings using shared task
+- name: Cleanup orphaned proxy policies
+  ansible.builtin.include_tasks: ../../common/tasks/cleanup_policies.yml
+  vars:
+    cleanup_items: "{{ proxy_providers }}"
+    cleanup_slug_attr: "app_slug"
+    cleanup_bindings: "{{ existing_bindings }}"
+    cleanup_policies: "{{ existing_policies }}"
+
+# Create/update group access policies for providers with groups
+- name: Build provider groups requiring policies
+  ansible.builtin.set_fact:
+    providers_with_groups: "{{ proxy_providers | selectattr('groups', 'defined') | list }}"
+
+- name: Create group access policies
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/policies/expression/"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      name: "{{ item.app_slug }}-group-access"
+      expression: |
+        # Allow superusers and users in: {{ item.groups | join(', ') }}
+        if request.user.is_superuser:
+            return True
+        allowed_groups = {{ item.groups | to_json }}
+        user_groups = [g.name for g in request.user.ak_groups.all()]
+        return any(g in user_groups for g in allowed_groups)
+    status_code: [200, 201]
+  loop: "{{ providers_with_groups }}"
+  loop_control:
+    label: "{{ item.app_slug }}"
+  when:
+    - not ansible_check_mode
+    - (item.app_slug ~ '-group-access') not in (existing_policies.json.results | map(attribute='name') | list)
+  register: created_policies
+
+- name: Update existing group access policies
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/policies/expression/{{ (existing_policies.json.results | selectattr('name', 'equalto', item.app_slug ~ '-group-access') | first).pk }}/"
+    method: PATCH
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      expression: |
+        # Allow superusers and users in: {{ item.groups | join(', ') }}
+        if request.user.is_superuser:
+            return True
+        allowed_groups = {{ item.groups | to_json }}
+        user_groups = [g.name for g in request.user.ak_groups.all()]
+        return any(g in user_groups for g in allowed_groups)
+    status_code: [200]
+  loop: "{{ providers_with_groups }}"
+  loop_control:
+    label: "{{ item.app_slug }}"
+  when:
+    - not ansible_check_mode
+    - (item.app_slug ~ '-group-access') in (existing_policies.json.results | map(attribute='name') | list)
+
+- name: Refresh expression policies
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/policies/expression/"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: all_policies
+  check_mode: false
+  when: providers_with_groups | length > 0
+
+# IMPORTANT: Policy bindings require policybindingmodel_ptr_id, not the app pk
+# See: commit 02659b6 for similar fix in password-policy.yml
+- name: Build app binding target lookup (policybindingmodel_ptr_id)
+  ansible.builtin.set_fact:
+    app_binding_targets: "{{ app_binding_targets | default({}) | combine({item.slug: item.policybindingmodel_ptr_id}) }}"
+  loop: "{{ refreshed_apps.json.results }}"
+  loop_control:
+    label: "{{ item.slug }}"
+  when:
+    - providers_with_groups | length > 0
+    - item.policybindingmodel_ptr_id is defined
+
+- name: Build existing binding targets
+  ansible.builtin.set_fact:
+    existing_binding_targets: "{{ existing_bindings.json.results | map(attribute='target') | list }}"
+  when: providers_with_groups | length > 0
+
+- name: Create policy bindings for applications
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/policies/bindings/"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      policy: "{{ (all_policies.json.results | selectattr('name', 'equalto', item.app_slug ~ '-group-access') | first).pk }}"
+      target: "{{ app_binding_targets[item.app_slug] }}"
+      order: 0
+      enabled: true
+      timeout: 30
+    status_code: [200, 201]
+  loop: "{{ providers_with_groups }}"
+  loop_control:
+    label: "{{ item.app_slug }}"
+  when:
+    - not ansible_check_mode
+    - all_policies is defined
+    - item.app_slug in (app_binding_targets | default({}))
+    - all_policies.json.results | selectattr('name', 'equalto', item.app_slug ~ '-group-access') | list | length > 0
+    - app_binding_targets[item.app_slug] not in existing_binding_targets
+
+- name: Get embedded outpost
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/outposts/instances/?name=authentik%20Embedded%20Outpost"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: embedded_outpost
+  check_mode: false
+
+- name: Get current outpost providers
+  ansible.builtin.set_fact:
+    current_outpost_providers: "{{ embedded_outpost.json.results[0].providers | default([]) }}"
+  when: embedded_outpost.json.results | length > 0
+
+- name: Update embedded outpost with proxy providers
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/outposts/instances/{{ embedded_outpost.json.results[0].pk }}/"
+    method: PATCH
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      providers: "{{ (current_outpost_providers + [item]) | unique }}"
+    status_code: [200]
+  loop: "{{ all_providers.json.results | selectattr('name', 'in', proxy_providers | map(attribute='name')) | map(attribute='pk') | list }}"
+  when:
+    - not ansible_check_mode
+    - embedded_outpost.json.results | length > 0
+    - item not in current_outpost_providers
+
+- name: Display proxy providers configured
+  ansible.builtin.debug:
+    msg: "Proxy providers: {{ all_providers.json.results | map(attribute='name') | list | join(', ') }}"

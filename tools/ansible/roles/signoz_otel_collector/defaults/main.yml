@@ -1,0 +1,79 @@
+---
+# SigNoz OpenTelemetry Collector Defaults
+
+# OTEL Collector endpoint (SigNoz)
+# EC2/VMs send telemetry to SigNoz via Traefik NLB
+#
+# IMPORTANT: Include port in endpoint!
+# Example: signoz.example.com:4317
+#
+# Override per environment in vars files:
+#   sbx: Set in vars/headscale.yml or similar
+#   prd: Set in vars/prd.yml
+otel_endpoint: ""  # REQUIRED: host:port format (e.g., signoz.example.com:4317)
+otel_insecure: true  # Internal NLB does not terminate TLS for gRPC
+
+# Service identification
+otel_service_name: "{{ inventory_hostname }}"
+otel_service_environment: "sbx"
+
+# Collector version
+# https://github.com/open-telemetry/opentelemetry-collector-releases/releases
+otel_collector_version: "0.142.0"
+
+# Collection intervals
+otel_metrics_interval: "60s"
+otel_logs_enabled: true
+
+# Host metrics to collect
+otel_host_metrics:
+  cpu: true
+  memory: true
+  disk: true
+  network: true
+  filesystem: true
+  load: true
+
+# Docker metrics (if Docker is installed)
+otel_docker_metrics: true
+
+# Docker container logs (requires Docker)
+otel_docker_logs: false
+
+# Log paths to collect
+otel_log_paths:
+  - "/var/log/syslog"
+  - "/var/log/auth.log"
+
+# Memory limits (increase for heavy Docker log environments)
+otel_memory_limit_mib: 256
+otel_memory_spike_mib: 64
+
+# Sending queue settings (buffer during connection issues)
+# With 1024 batch size, 5000 = ~5M data points buffered
+otel_queue_size: 5000
+otel_queue_num_consumers: 10
+
+# Retry settings
+otel_retry_max_elapsed_time: "600s"
+
+# Keepalive settings (prevents NLB idle connection closures)
+# time: how often to send keepalive pings (must be > server's minimum)
+# timeout: how long to wait for pong response
+# Note: 120s avoids "too_many_pings" ENHANCE_YOUR_CALM from gRPC servers
+# If you see ENHANCE_YOUR_CALM errors, increase this value
+otel_keepalive_time: "120s"
+otel_keepalive_timeout: "20s"
+
+# Log filter regex pattern
+# Word boundaries (\b) prevent false matches like "stderr", "terrain"
+# Matches: error, warn, warning, fatal, panic, critical, fail, failed, failure, denied, refused
+otel_log_filter_pattern: '(?i)(\\berror\\b|\\bwarn(ing)?\\b|\\bfatal\\b|\\bpanic\\b|\\bcritical\\b|\\bfail(ed|ure)?\\b|\\bdenied\\b|\\brefused\\b)'
+
+# =============================================================================
+# Headscale VPN Log Parsing
+# =============================================================================
+# Enable parsing of headscale "handled request" JSON logs
+# Extracts: request.client_ip, request.uri, status, etc.
+# Use with: otel_headscale_log_parsing: true in headscale vars
+otel_headscale_log_parsing: false

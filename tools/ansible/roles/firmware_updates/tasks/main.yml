@@ -1,0 +1,88 @@
+---
+# Firmware Updates Role
+# Monthly firmware update checks and installation using fwupd
+
+- name: Install fwupd (firmware update tool)
+  ansible.builtin.apt:
+    name:
+      - fwupd
+      - fwupd-signed
+    state: present
+    update_cache: true
+  tags: [firmware, install]
+
+- name: Ensure fwupd service is enabled
+  ansible.builtin.systemd:
+    name: fwupd
+    enabled: true
+    state: started
+  tags: [firmware, service]
+
+- name: Get current firmware information (before update)
+  ansible.builtin.command: fwupdmgr get-devices --no-unreported-check
+  register: firmware_before
+  changed_when: false
+  failed_when: false
+  check_mode: false  # Always run to gather info, even in check mode
+  tags: [firmware, check]
+
+- name: Refresh firmware metadata from LVFS
+  ansible.builtin.command: fwupdmgr refresh --force
+  register: metadata_refresh
+  changed_when: "'Successfully' in metadata_refresh.stdout"
+  failed_when: false
+  check_mode: false  # Always run to get latest metadata
+  tags: [firmware, refresh]
+
+- name: Check for available firmware updates
+  ansible.builtin.command: fwupdmgr get-updates
+  register: firmware_updates_check
+  changed_when: false
+  failed_when: false
+  check_mode: false  # Always run to determine what would update
+  tags: [firmware, check]
+
+- name: Set updates available fact
+  ansible.builtin.set_fact:
+    firmware_updates_available: "{{ firmware_updates_check }}"
+  when: firmware_updates_check.rc == 0
+  tags: [firmware, check]
+
+- name: Apply firmware updates (requires reboot after)
+  ansible.builtin.command: fwupdmgr update --no-reboot-check --assume-yes
+  register: firmware_update_result
+  changed_when: "'Successfully' in firmware_update_result.stdout"
+  failed_when: false
+  when: firmware_updates_check.rc == 0
+  tags: [firmware, update]
+
+- name: Get firmware information (after update)
+  ansible.builtin.command: fwupdmgr get-devices --no-unreported-check
+  register: firmware_after
+  changed_when: false
+  failed_when: false
+  check_mode: false  # Always run to gather info for report
+  tags: [firmware, check]
+
+- name: Generate firmware update report
+  ansible.builtin.template:
+    src: firmware-report.md.j2
+    dest: "/var/log/firmware-updates/{{ ansible_date_time.iso8601_basic_short }}-{{ inventory_hostname }}.md"
+    mode: "0644"
+  tags: [firmware, report]
+
+- name: Display firmware update summary
+  ansible.builtin.debug:
+    msg: "{{ inventory_hostname }}: Updates={{ 'Applied' if firmware_update_result.changed | default(false) else ('Available' if firmware_updates_check.rc == 0 else 'None') }} Reboot={{ 'Required' if firmware_update_result.changed | default(false) else 'No' }} Report=/var/log/firmware-updates/{{ ansible_date_time.iso8601_basic_short }}-{{ inventory_hostname }}.md"
+  tags: [firmware, report]
+
+- name: Check if reboot is required
+  ansible.builtin.stat:
+    path: /var/run/reboot-required
+  register: reboot_required
+  tags: [firmware, reboot]
+
+- name: Set reboot needed fact
+  ansible.builtin.set_fact:
+    firmware_reboot_needed: "{{ reboot_required.stat.exists or firmware_update_result.changed | default(false) }}"
+  tags: [firmware, reboot]

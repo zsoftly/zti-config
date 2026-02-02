@@ -1,0 +1,95 @@
+# Launcher App Configurations
+# Apps that appear in Authentik library but handle their own SSO
+# These create applications with meta_launch_url (no provider needed)
+#
+# Use for:
+# - Apps with native Google OAuth SSO
+# - Apps with their own authentication
+# - External apps you want in your app directory
+#
+# Options:
+#   groups: [] - restrict visibility to specific groups (creates policy binding)
+#   icon: Local icon filename from files/icons/ (uploaded to Authentik)
+---
+# Alphabetical order for consistent UI display
+launcher_apps:
+  - name: ArgoCD
+    slug: argocd
+    icon: "argo-cd.svg"
+    launch_url: "https://<your-eks-endpoint>.eks-capabilities.<region>.amazonaws.com/applications"
+    # No groups - visible to everyone
+
+  # AWS Console removed - now handled by SAML SSO (aws-sso app in 09_saml)
+
+  - name: Cloudflare
+    slug: cloudflare
+    icon: "cloudflare.svg"
+    launch_url: "https://dash.cloudflare.com/<your-cloudflare-account-id>/home/domains"
+    # No groups - visible to everyone
+
+  - name: Fiverr
+    slug: fiverr
+    icon: "fiverr.png"
+    launch_url: "https://www.fiverr.com"
+    # Google OAuth SSO
+
+  - name: GoHighLevel
+    slug: gohighlevel
+    icon: "ghl.jpg"
+    launch_url: "https://app.gohighlevel.com/v2/location/<your-ghl-location-id>/dashboard"
+    # No groups - visible to everyone
+
+  - name: n8n
+    slug: n8n
+    icon: "n8n.svg"
+    launch_url: "https://n8n.example.com"
+    # No groups - visible to everyone (n8n has built-in auth)
+
+  - name: GigRadar
+    slug: gigradar
+    icon: "gigrader.jpeg"
+    launch_url: "https://beta.gigradar.io/home/getting-started"
+    groups:
+      - gigradar-users
+    # External freelance platform - restricted to gigradar-users group
+
+  - name: GitHub
+    slug: github
+    icon: "github-light.png"
+    launch_url: "https://github.com/example-org"
+    # No groups - visible to everyone
+
+  - name: Slack
+    slug: slack
+    icon: "slack.png"
+    launch_url: "https://example.slack.com"
+    # No groups - visible to everyone
+
+  - name: SigNoz Observability
+    slug: signoz
+    icon: "signoz.png"
+    launch_url: "https://app.example.com"
+    groups:
+      - app-signoz-admin
+      - app-signoz-readonly
+
+  - name: Traefik Dashboard
+    slug: traefik
+    icon: "traefik.png"
+    launch_url: "https://app.example.com/dashboard/#/"
+    groups:
+      - admins
+
+  - name: Upwork
+    slug: upwork
+    icon: "upwork.png"
+    launch_url: "https://www.upwork.com"
+    # Google OAuth SSO
+
+  - name: Wiki.js
+    slug: wikijs
+    icon: "wikijs.png"
+    launch_url: "https://app.example.com"
+    # No groups - visible to everyone
+
+  # Vaultwarden moved to OIDC providers (vars/oidc-providers.yml)

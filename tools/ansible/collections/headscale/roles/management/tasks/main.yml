@@ -1,0 +1,47 @@
+---
+# Management tools role
+
+- name: Create hctl management script
+  ansible.builtin.template:
+    src: headscale-ctl.sh.j2
+    dest: /usr/local/bin/hctl
+    mode: "0755"
+  tags: [hctl]
+
+# =============================================================================
+# Health Check Script - runs via cron, auto-repairs VPN issues
+# =============================================================================
+- name: Create health check script
+  ansible.builtin.template:
+    src: healthcheck.sh.j2
+    dest: /opt/headscale/healthcheck.sh
+    mode: "0755"
+  tags: [healthcheck]
+
+- name: Configure health check cron job
+  ansible.builtin.cron:
+    name: "Headscale health check"
+    minute: "{{ headscale_healthcheck_schedule.split()[0] }}"
+    hour: "{{ headscale_healthcheck_schedule.split()[1] }}"
+    day: "{{ headscale_healthcheck_schedule.split()[2] }}"
+    month: "{{ headscale_healthcheck_schedule.split()[3] }}"
+    weekday: "{{ headscale_healthcheck_schedule.split()[4] }}"
+    job: "/opt/headscale/healthcheck.sh"
+    user: root
+  tags: [healthcheck]
+
+- name: Display installation summary
+  ansible.builtin.debug:
+    msg: |
+      [OK] Headscale installation complete!
+
+      Server: {{ inventory_hostname }}
+      URL: https://{{ headscale_domain }}
+
+      Management: hctl <command>
+        hctl s      Status
+        hctl l      Logs
+        hctl u      List users
+        hctl n      List nodes
+        hctl k      List preauth keys
+        hctl b      Backup

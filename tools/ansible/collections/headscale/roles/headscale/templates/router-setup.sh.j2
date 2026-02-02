@@ -1,0 +1,92 @@
+#!/bin/bash
+# Headscale VPN Router Setup Script
+# Managed by Ansible - do not edit manually
+#
+# Pattern: One VPN router per VPC, advertising that VPC's CIDR + Cloudflare IPs.
+# Tag: subnet-router - identifies this node as a VPN gateway that routes traffic
+#      between VPN clients and AWS VPC / Cloudflare protected sites.
+#
+# This script:
+# 1. Checks if the router exists in headscale
+# 2. Creates inf namespace and preauth key if needed
+# 3. Registers/updates the router with tag:subnet-router
+# 4. Approves all advertised routes (AWS VPC + Cloudflare CIDRs)
+
+set -e
+
+cd /opt/headscale
+
+echo "=== Headscale Router Setup ==="
+echo "Router hostname: ${ROUTER_HOSTNAME}"
+echo "Headscale domain: ${HEADSCALE_DOMAIN}"
+
+# Check if router exists in headscale
+ROUTER_ID=$(docker compose exec -T headscale headscale nodes list -o json 2>/dev/null | \
+  jq -r --arg name "${ROUTER_HOSTNAME}" '.[] | select(.given_name == $name) | .id' || echo "")
+
+if [ -z "$ROUTER_ID" ] || [ "$ROUTER_ID" = "null" ]; then
+  echo "Router not found in headscale, creating new registration..."
+
+  # Get or create inf user
+  INF_ID=$(docker compose exec -T headscale headscale users list -o json | \
+    jq -r '.[] | select(.name == "inf") | .id')
+
+  if [ -z "$INF_ID" ] || [ "$INF_ID" = "null" ]; then
+    echo "Creating inf namespace..."
+    docker compose exec -T headscale headscale users create inf
+    sleep 2
+    INF_ID=$(docker compose exec -T headscale headscale users list -o json | \
+      jq -r '.[] | select(.name == "inf") | .id')
+  fi
+
+  echo "Using inf namespace (ID: $INF_ID)"
+
+  # Create a reusable key with subnet-router tag
+  echo "Creating router preauth key..."
+  KEY=$(docker compose exec -T headscale headscale preauthkeys create \
+    -u "$INF_ID" --reusable --tags tag:subnet-router -e 8760h -o json | jq -r '.key')
+
+  if [ -z "$KEY" ] || [ "$KEY" = "null" ]; then
+    echo "ERROR: Failed to create preauth key"
+    exit 1
+  fi
+
+  echo "Registering router with headscale..."
+  tailscale up --reset \
+    --login-server="https://${HEADSCALE_DOMAIN}" \
+    --authkey="$KEY" \
+    --advertise-routes="${ADVERTISE_ROUTES}" \
+    --accept-routes=false \
+    --hostname="${ROUTER_HOSTNAME}" \
+    --advertise-tags=tag:subnet-router \
+    ${EXIT_NODE_FLAG}
+
+  sleep 5
+
+  # Get the new router ID
+  ROUTER_ID=$(docker compose exec -T headscale headscale nodes list -o json | \
+    jq -r --arg name "${ROUTER_HOSTNAME}" '.[] | select(.given_name == $name) | .id')
+else
+  echo "Router found (ID: $ROUTER_ID), updating configuration..."
+  tailscale up --reset \
+    --login-server="https://${HEADSCALE_DOMAIN}" \
+    --advertise-routes="${ADVERTISE_ROUTES}" \
+    --accept-routes=false \
+    --hostname="${ROUTER_HOSTNAME}" \
+    --advertise-tags=tag:subnet-router \
+    ${EXIT_NODE_FLAG}
+
+  sleep 3
+fi
+
+# Approve routes
+if [ -n "$ROUTER_ID" ] && [ "$ROUTER_ID" != "null" ]; then
+  echo "Approving routes for router (ID: $ROUTER_ID)..."
+  docker compose exec -T headscale headscale nodes approve-routes \
+    --identifier "$ROUTER_ID" \
+    --routes "${ALL_ROUTES}"
+  echo "=== Router setup complete ==="
+else
+  echo "ERROR: Failed to get router node ID"
+  exit 1
+fi

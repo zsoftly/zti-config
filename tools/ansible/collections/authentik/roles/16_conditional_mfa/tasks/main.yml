@@ -1,0 +1,132 @@
+# Configure MFA for Password Authentication
+# OAuth logins bypass the authentication flow entirely, so MFA only applies to password logins
+---
+
+# Get and Update MFA Validation Stage
+- name: Get MFA validation stage
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/stages/authenticator/validate/?name={{ conditional_mfa.validation_stage.name }}"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: mfa_validation_stage
+  check_mode: false
+
+- name: Verify MFA validation stage exists
+  ansible.builtin.assert:
+    that:
+      - mfa_validation_stage.json.results | length > 0
+    fail_msg: "MFA validation stage '{{ conditional_mfa.validation_stage.name }}' not found. Run role 03_security first."
+
+- name: Set MFA validation stage PK
+  ansible.builtin.set_fact:
+    mfa_validation_stage_pk: "{{ mfa_validation_stage.json.results[0].pk }}"
+
+# Look up configuration stage PKs for 'configure' action
+- name: Get TOTP setup stage for configuration
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/stages/authenticator/totp/"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: totp_stages_lookup
+  check_mode: false
+
+- name: Build configuration stages list
+  ansible.builtin.set_fact:
+    config_stage_pks: "{{ totp_stages_lookup.json.results | selectattr('name', 'in', conditional_mfa.validation_stage.configuration_stages) | map(attribute='pk') | list }}"
+
+- name: Update MFA validation stage configuration
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/stages/authenticator/validate/{{ mfa_validation_stage_pk }}/"
+    method: PATCH
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      not_configured_action: "{{ conditional_mfa.validation_stage.not_configured_action }}"
+      device_classes: "{{ conditional_mfa.validation_stage.device_classes }}"
+      configuration_stages: "{{ config_stage_pks }}"
+    status_code: [200]
+  when:
+    - not ansible_check_mode
+  register: updated_mfa_stage
+
+# Get Authentication Flow and Bind MFA Stage
+- name: Get authentication flow
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/flows/instances/?slug={{ conditional_mfa.flow_binding.flow_slug }}"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: auth_flow
+  check_mode: false
+
+- name: Verify authentication flow exists
+  ansible.builtin.assert:
+    that:
+      - auth_flow.json.results | length > 0
+    fail_msg: "Authentication flow '{{ conditional_mfa.flow_binding.flow_slug }}' not found"
+
+- name: Set authentication flow PK
+  ansible.builtin.set_fact:
+    auth_flow_pk: "{{ auth_flow.json.results[0].pk }}"
+
+# Check existing flow bindings
+- name: Get existing flow bindings
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/flows/bindings/?target={{ auth_flow_pk }}"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: existing_flow_bindings
+  check_mode: false
+
+- name: Find existing MFA stage binding
+  ansible.builtin.set_fact:
+    mfa_binding_exists: "{{ mfa_validation_stage_pk in (existing_flow_bindings.json.results | map(attribute='stage') | list) }}"
+
+- name: Show MFA binding status (check mode)
+  ansible.builtin.debug:
+    msg: "MFA stage binding to '{{ conditional_mfa.flow_binding.flow_slug }}' {{ 'exists' if mfa_binding_exists else 'will be created' }}"
+  when: ansible_check_mode
+
+# Create flow binding for MFA stage if not exists
+- name: Create MFA stage binding to flow
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/flows/bindings/"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      target: "{{ auth_flow_pk }}"
+      stage: "{{ mfa_validation_stage_pk }}"
+      order: "{{ conditional_mfa.flow_binding.order }}"
+      evaluate_on_plan: true
+      re_evaluate_policies: true
+      invalid_response_action: "retry"
+    status_code: [200, 201]
+  when:
+    - not ansible_check_mode
+    - not mfa_binding_exists
+  register: created_mfa_binding
+
+- name: Display MFA configuration status
+  ansible.builtin.pause:
+    seconds: 0
+    prompt: |
+
+      MFA Configuration for Password Authentication:
+        Validation Stage: {{ conditional_mfa.validation_stage.name }}
+        Not Configured Action: {{ conditional_mfa.validation_stage.not_configured_action }}
+        Flow: {{ conditional_mfa.flow_binding.flow_slug }}
+        ----------------------------------------
+        OAuth login (Google): Bypasses authentication flow - NO MFA
+        Password login: MFA REQUIRED (forced setup if not configured)

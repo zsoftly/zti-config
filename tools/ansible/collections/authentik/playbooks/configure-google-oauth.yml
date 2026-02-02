@@ -1,0 +1,30 @@
+---
+- name: Configure Google Workspace OAuth Source
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars_files:
+    - ../vars/authentik.yml
+    - ../vars/vault.yml
+    - ../vars/google-oauth.yml
+
+  vars:
+    authentik_token: "{{ vault_authentik_token }}"
+
+  pre_tasks:
+    - name: Validate token
+      ansible.builtin.assert:
+        that: authentik_token | trim | length > 0
+        fail_msg: "Failed to retrieve token"
+
+    - name: Validate Google credentials
+      ansible.builtin.assert:
+        that:
+          - google_oauth_client_id != "REPLACE_WITH_GOOGLE_CLIENT_ID"
+          - google_oauth_client_secret != "REPLACE_WITH_GOOGLE_CLIENT_SECRET"
+        fail_msg: "Update vars/google-oauth.yml with Google OAuth credentials"
+
+  tasks:
+    - name: Configure Google OAuth source
+      ansible.builtin.include_tasks: ../tasks/google-oauth-source.yml

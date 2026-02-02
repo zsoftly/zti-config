@@ -1,0 +1,37 @@
+---
+# Example users for Authentik Identity Provider
+# Replace with your actual users
+
+authentik_users:
+  # Administrators
+  - username: admin
+    name: "Admin User"
+    email: admin@example.com
+    groups:
+      - admins
+      - aws-admin
+      - app-admin
+
+  # Regular users
+  - username: john.doe
+    name: "John Doe"
+    email: john.doe@example.com
+    groups:
+      - users
+      - app-user
+
+  - username: jane.smith
+    name: "Jane Smith"
+    email: jane.smith@example.com
+    groups:
+      - users
+      - app-developer
+      - gitlab-users
+
+  # Service accounts
+  - username: ldapservice
+    name: "LDAP Service Account"
+    email: ldapservice@example.com
+    groups:
+      - service-accounts
+    # Password should be stored in vault or secrets manager

@@ -1,0 +1,28 @@
+---
+# 02-system-updates.yml
+# System Maintenance: OS patching and firmware updates
+# Dependencies: None
+# Run: ansible-playbook tools/ansible/playbooks/02-system-updates.yml -i inventory/hosts.yml
+
+- name: System Updates and Firmware Management
+  hosts: all
+  become: true
+
+  roles:
+    - role: system_updates
+      tags: [updates, system]
+
+    - role: firmware_updates
+      tags: [updates, firmware]
+
+  post_tasks:
+    - name: Check if reboot is required
+      ansible.builtin.stat:
+        path: /var/run/reboot-required
+      register: reboot_required
+      tags: [verify]
+
+    - name: Display reboot status
+      ansible.builtin.debug:
+        msg: "Reboot {{ 'IS' if reboot_required.stat.exists else 'NOT' }} required"
+      tags: [verify]

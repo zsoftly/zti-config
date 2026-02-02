@@ -1,0 +1,77 @@
+# Configure Reputation Policy
+# Tracks failed login attempts and triggers additional verification
+# Supports: --check --diff for dry runs
+---
+
+- name: Get existing reputation policies
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/policies/reputation/"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: existing_reputation_policies
+  check_mode: false
+
+- name: Check if reputation policy exists
+  ansible.builtin.set_fact:
+    reputation_policy_exists: "{{ reputation_policy.name in (existing_reputation_policies.json.results | map(attribute='name') | list) }}"
+    existing_reputation_pk: "{{ (existing_reputation_policies.json.results | selectattr('name', 'equalto', reputation_policy.name) | first).pk | default('') }}"
+
+- name: Show reputation policy that would be created (check mode)
+  ansible.builtin.debug:
+    msg: "Would create reputation policy: {{ reputation_policy.name }}"
+  when: ansible_check_mode and not reputation_policy_exists
+
+- name: Show reputation policy that would be updated (check mode)
+  ansible.builtin.debug:
+    msg: "Would update reputation policy: {{ reputation_policy.name }}"
+  when: ansible_check_mode and reputation_policy_exists
+
+- name: Create reputation policy
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/policies/reputation/"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      name: "{{ reputation_policy.name }}"
+      execution_logging: true
+      threshold: "{{ reputation_policy.threshold }}"
+      check_ip: "{{ reputation_policy.check_ip }}"
+      check_username: "{{ reputation_policy.check_username }}"
+    status_code: [200, 201]
+  when:
+    - not ansible_check_mode
+    - not reputation_policy_exists
+  register: created_reputation_policy
+
+- name: Update existing reputation policy
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/policies/reputation/{{ existing_reputation_pk }}/"
+    method: PUT
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      name: "{{ reputation_policy.name }}"
+      execution_logging: true
+      threshold: "{{ reputation_policy.threshold }}"
+      check_ip: "{{ reputation_policy.check_ip }}"
+      check_username: "{{ reputation_policy.check_username }}"
+    status_code: [200]
+  when:
+    - not ansible_check_mode
+    - reputation_policy_exists
+  register: updated_reputation_policy
+
+- name: Set reputation policy PK
+  ansible.builtin.set_fact:
+    reputation_policy_pk: "{{ created_reputation_policy.json.pk | default(existing_reputation_pk) }}"
+
+- name: Display reputation policy status
+  ansible.builtin.debug:
+    msg: "Reputation policy: {{ reputation_policy.name }} (threshold={{ reputation_policy.threshold }})"

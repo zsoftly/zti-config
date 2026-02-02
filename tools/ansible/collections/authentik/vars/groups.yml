@@ -1,0 +1,29 @@
+---
+# Example groups for Authentik Identity Provider
+# Replace with your actual group structure
+
+authentik_groups:
+  # Core groups
+  - name: admins
+    is_superuser: true
+
+  - name: users
+    is_superuser: false
+
+  - name: service-accounts
+    is_superuser: false
+
+  # Application-specific groups
+  - name: app-admin
+  - name: app-developer
+  - name: app-user
+  - name: app-readonly
+
+  # GitLab access
+  - name: gitlab-users
+  - name: gitlab-admins
+
+  # AWS IAM Identity Center
+  - name: aws-admin
+  - name: aws-poweruser
+  - name: aws-readonly

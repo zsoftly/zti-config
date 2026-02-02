@@ -1,0 +1,220 @@
+# Create Launcher Applications (no provider, just launch URL)
+# For apps that handle their own SSO but should appear in Authentik library
+# Supports: --check --diff for dry runs
+---
+- name: Get existing applications
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/core/applications/?page_size=500"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: existing_apps
+  check_mode: false
+
+- name: Show apps that would be created (check mode)
+  ansible.builtin.debug:
+    msg: "Would create launcher app: {{ item.name }} → {{ item.launch_url }}"
+  loop: "{{ launcher_apps }}"
+  loop_control:
+    label: "{{ item.slug }}"
+  when:
+    - ansible_check_mode
+    - item.slug not in (existing_apps.json.results | map(attribute='slug') | list)
+
+- name: Create launcher applications
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/core/applications/"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      name: "{{ item.name }}"
+      slug: "{{ item.slug }}"
+      meta_launch_url: "{{ item.launch_url }}"
+      open_in_new_tab: true
+      policy_engine_mode: "any"
+    status_code: [200, 201]
+  loop: "{{ launcher_apps }}"
+  loop_control:
+    label: "{{ item.slug }}"
+  when:
+    - not ansible_check_mode
+    - item.slug not in (existing_apps.json.results | map(attribute='slug') | list)
+  register: created_apps
+
+- name: Update existing launcher applications
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/core/applications/{{ item.slug }}/"
+    method: PATCH
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      name: "{{ item.name }}"
+      meta_launch_url: "{{ item.launch_url }}"
+      open_in_new_tab: true
+    status_code: [200]
+  loop: "{{ launcher_apps }}"
+  loop_control:
+    label: "{{ item.slug }}"
+  when:
+    - not ansible_check_mode
+    - item.slug in (existing_apps.json.results | map(attribute='slug') | list)
+
+# Refresh applications list after create/update
+- name: Refresh applications list
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/core/applications/?page_size=500"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: refreshed_apps
+  check_mode: false
+
+# Upload application icons using shared task
+- name: Upload launcher icons
+  ansible.builtin.include_tasks: ../../common/tasks/upload_icons.yml
+  vars:
+    icon_items: "{{ launcher_apps }}"
+    icon_slug_attr: "slug"
+    icon_apps_list: "{{ refreshed_apps }}"
+
+# Group-based access control via policy bindings
+- name: Get existing policy bindings
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/policies/bindings/"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: existing_bindings
+  check_mode: false
+
+- name: Get existing expression policies
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/policies/expression/"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: existing_policies
+  check_mode: false
+
+# Cleanup orphaned policy bindings using shared task
+- name: Cleanup orphaned launcher policies
+  ansible.builtin.include_tasks: ../../common/tasks/cleanup_policies.yml
+  vars:
+    cleanup_items: "{{ launcher_apps }}"
+    cleanup_slug_attr: "slug"
+    cleanup_bindings: "{{ existing_bindings }}"
+    cleanup_policies: "{{ existing_policies }}"
+
+# Create/update group access policies for apps with groups
+- name: Build apps requiring group policies
+  ansible.builtin.set_fact:
+    apps_with_groups: "{{ launcher_apps | selectattr('groups', 'defined') | list }}"
+
+- name: Create group access policies
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/policies/expression/"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      name: "{{ item.slug }}-group-access"
+      expression: |
+        # Allow superusers and users in: {{ item.groups | join(', ') }}
+        if request.user.is_superuser:
+            return True
+        allowed_groups = {{ item.groups | to_json }}
+        user_groups = [g.name for g in request.user.ak_groups.all()]
+        return any(g in user_groups for g in allowed_groups)
+    status_code: [200, 201]
+  loop: "{{ apps_with_groups }}"
+  loop_control:
+    label: "{{ item.slug }}"
+  when:
+    - not ansible_check_mode
+    - (item.slug ~ '-group-access') not in (existing_policies.json.results | map(attribute='name') | list)
+  register: created_policies
+
+- name: Update existing group access policies
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/policies/expression/{{ (existing_policies.json.results | selectattr('name', 'equalto', item.slug ~ '-group-access') | first).pk }}/"
+    method: PATCH
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      expression: |
+        # Allow superusers and users in: {{ item.groups | join(', ') }}
+        if request.user.is_superuser:
+            return True
+        allowed_groups = {{ item.groups | to_json }}
+        user_groups = [g.name for g in request.user.ak_groups.all()]
+        return any(g in user_groups for g in allowed_groups)
+    status_code: [200]
+  loop: "{{ apps_with_groups }}"
+  loop_control:
+    label: "{{ item.slug }}"
+  when:
+    - not ansible_check_mode
+    - (item.slug ~ '-group-access') in (existing_policies.json.results | map(attribute='name') | list)
+
+- name: Refresh expression policies
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/policies/expression/"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: all_policies
+  check_mode: false
+  when: apps_with_groups | length > 0
+
+- name: Refresh bindings after cleanup
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/policies/bindings/"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: current_bindings
+  check_mode: false
+  when: apps_with_groups | length > 0
+
+- name: Create policy bindings for applications
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/policies/bindings/"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      policy: "{{ (all_policies.json.results | selectattr('name', 'equalto', item.slug ~ '-group-access') | first).pk }}"
+      target: "{{ (refreshed_apps.json.results | selectattr('slug', 'equalto', item.slug) | first).pk }}"
+      order: 0
+      enabled: true
+      timeout: 30
+    status_code: [200, 201]
+  loop: "{{ apps_with_groups }}"
+  loop_control:
+    label: "{{ item.slug }}"
+  when:
+    - not ansible_check_mode
+    - all_policies is defined
+    - all_policies.json.results | selectattr('name', 'equalto', item.slug ~ '-group-access') | list | length > 0
+    - current_bindings.json.results | selectattr('target', 'equalto', (refreshed_apps.json.results | selectattr('slug', 'equalto', item.slug) | first).pk) | list | length == 0
+
+- name: Display launcher apps configured
+  ansible.builtin.debug:
+    msg: "Launcher apps: {{ launcher_apps | map(attribute='name') | list | join(', ') }}"

@@ -1,0 +1,88 @@
+---
+name: Security Scan
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  schedule:
+    - cron: '0 0 * * 0'  # Weekly on Sunday
+
+jobs:
+  secret-scan:
+    name: Detect Secrets
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run Gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  ansible-vault-check:
+    name: Check for Unencrypted Secrets
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Check for vault files
+        run: |
+          echo "Checking for unencrypted vault files..."
+
+          # Find potential vault files
+          VAULT_FILES=$(find . -name "*vault*.yml" -o -name "*secret*.yml" | grep -v ".venv" || true)
+
+          if [ -n "$VAULT_FILES" ]; then
+            echo "Found potential vault files:"
+            echo "$VAULT_FILES"
+
+            # Check if files are encrypted
+            for file in $VAULT_FILES; do
+              if head -n1 "$file" | grep -q "\$ANSIBLE_VAULT"; then
+                echo "✓ $file is encrypted"
+              else
+                echo "✗ $file is NOT encrypted - this may contain secrets!"
+                exit 1
+              fi
+            done
+          else
+            echo "No vault files found"
+          fi
+
+  dependency-check:
+    name: Dependency Security Check
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install safety
+        run: pip install safety
+
+      - name: Check Python dependencies
+        run: |
+          # Check if requirements files exist
+          if [ -f "requirements.yml" ]; then
+            echo "Checking Ansible Galaxy dependencies..."
+            # Galaxy dependencies don't have CVE scanning yet
+            echo "Manual review required for Galaxy collections"
+          fi
+
+          if [ -f "tools/ansible/collections/*/requirements-ansible.txt" ]; then
+            echo "Checking Python dependencies..."
+            find tools/ansible/collections -name "requirements-ansible.txt" -exec safety check --file {} \; || true
+          fi

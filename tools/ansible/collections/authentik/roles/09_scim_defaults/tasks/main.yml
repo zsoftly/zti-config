@@ -1,0 +1,89 @@
+# Configure Global SCIM Property Mapping Defaults
+#
+# Creates default SCIM user mapping that uses email as userName.
+# This ensures SAML NameID (email) matches SCIM userName for proper user matching.
+---
+
+# Get all existing property mappings
+- name: Get all property mappings
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/propertymappings/all/?page_size=500"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: all_mappings
+  check_mode: false
+
+# Check if our default mapping exists
+- name: Check if default SCIM email mapping exists
+  ansible.builtin.set_fact:
+    scim_email_mapping: "{{ all_mappings.json.results | selectattr('name', 'equalto', scim_default_user_mapping.name) | first | default(none) }}"
+
+# Create the default mapping if it doesn't exist
+- name: Create default SCIM user mapping (email as userName)
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/propertymappings/provider/scim/"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      name: "{{ scim_default_user_mapping.name }}"
+      expression: "{{ scim_default_user_mapping.expression }}"
+    status_code: [200, 201]
+  when:
+    - not ansible_check_mode
+    - scim_email_mapping is none
+  register: created_mapping
+
+- name: Display mapping creation status
+  ansible.builtin.debug:
+    msg: "Created default SCIM mapping: {{ scim_default_user_mapping.name }}"
+  when:
+    - created_mapping is defined
+    - created_mapping is not skipped
+
+# Update the mapping if it exists (ensure expression is current)
+- name: Update default SCIM user mapping if exists
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/propertymappings/provider/scim/{{ scim_email_mapping.pk }}/"
+    method: PATCH
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      expression: "{{ scim_default_user_mapping.expression }}"
+    status_code: [200]
+  when:
+    - not ansible_check_mode
+    - scim_email_mapping is not none
+  register: updated_mapping
+
+- name: Display mapping update status
+  ansible.builtin.debug:
+    msg: "Updated default SCIM mapping: {{ scim_default_user_mapping.name }}"
+  when:
+    - updated_mapping is defined
+    - updated_mapping is not skipped
+
+# Get the mapping PK for use by other roles
+- name: Refresh property mappings
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/propertymappings/all/?page_size=500"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: all_mappings_refreshed
+  check_mode: false
+
+- name: Set default SCIM mapping PK as fact
+  ansible.builtin.set_fact:
+    scim_default_user_mapping_pk: "{{ (all_mappings_refreshed.json.results | selectattr('name', 'equalto', scim_default_user_mapping.name) | first).pk }}"
+
+- name: Display default SCIM mapping summary
+  ansible.builtin.debug:
+    msg: "Default SCIM user mapping configured: {{ scim_default_user_mapping.name }} (uses email as userName for SAML/SCIM matching)"

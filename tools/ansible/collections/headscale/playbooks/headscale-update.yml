@@ -1,0 +1,40 @@
+---
+# Headscale Update Playbook
+# Updates Headscale to the version specified in vars
+#
+# Usage:
+#   ansible-playbook playbooks/headscale-update.yml
+
+- name: Update Headscale VPN Server
+  hosts: all
+  become: true
+  gather_facts: true
+
+  vars_files:
+    - ../vars/headscale.yml
+    - ../vars/vault.yml
+
+  vars:
+    headscale_update_config: true
+
+  pre_tasks:
+    - name: Run backup before update
+      ansible.builtin.command:
+        cmd: /opt/headscale/backup.sh
+      register: backup_result
+      changed_when: "'OK' in backup_result.stdout"
+
+  roles:
+    - role: headscale
+
+  post_tasks:
+    - name: Verify containers running
+      ansible.builtin.command:
+        cmd: docker compose ps --format json
+        chdir: /opt/headscale
+      register: containers
+      changed_when: false
+
+    - name: Display status
+      ansible.builtin.debug:
+        msg: "Update complete. Run 'hctl s' to verify status."

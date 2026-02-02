@@ -1,0 +1,111 @@
+# Configure Authentik Branding (Logo, Colors, Custom CSS)
+# Supports: --check --diff for dry runs
+---
+- name: Get default brand
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/core/brands/?default=true"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: default_brand
+  check_mode: false
+
+- name: Show brand that would be updated (check mode)
+  ansible.builtin.debug:
+    msg: "Would update brand: {{ default_brand.json.results[0].branding_title }} → {{ branding.title }}"
+  when:
+    - ansible_check_mode
+    - default_brand.json.results | length > 0
+
+- name: Update brand settings (title, logo, favicon, custom CSS)
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/core/brands/{{ default_brand.json.results[0].brand_uuid }}/"
+    method: PATCH
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      branding_title: "{{ branding.title }}"
+      branding_logo: "{{ branding.logo_url }}"
+      branding_favicon: "{{ branding.favicon_url }}"
+      branding_custom_css: "{{ branding.custom_css }}"
+    status_code: [200]
+  when:
+    - not ansible_check_mode
+    - default_brand.json.results | length > 0
+
+# Update authentication flow title (main welcome text)
+- name: Get default authentication flow
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/flows/instances/default-authentication-flow/"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: auth_flow
+  check_mode: false
+
+- name: Update authentication flow title
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/flows/instances/default-authentication-flow/"
+    method: PATCH
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      name: "{{ branding.welcome_title }}"
+      title: "{{ branding.welcome_title }}"
+    status_code: [200]
+  when:
+    - not ansible_check_mode
+    - branding.welcome_title is defined
+
+# Upload flow background to Authentik media storage
+- name: Upload flow background
+  ansible.builtin.command:
+    cmd: >-
+      curl -sS -X POST
+      "{{ authentik_url }}{{ authentik_api_path }}/flows/instances/default-authentication-flow/set_background/"
+      -H "Authorization: Bearer {{ authentik_token | trim }}"
+      -F "file=@{{ playbook_dir }}/../files/branding/{{ branding.background }};type=image/png"
+  register: background_upload
+  when:
+    - not ansible_check_mode
+    - branding.background is defined
+    - branding.background | length > 0
+  changed_when: true
+
+# Update identification stage pretitle (subtitle under main welcome)
+- name: Get identification stage
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/stages/identification/?name=default-authentication-identification"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: ident_stage
+  check_mode: false
+
+- name: Update identification stage pretitle
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/stages/identification/{{ ident_stage.json.results[0].pk }}/"
+    method: PATCH
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      pretitle: "{{ branding.welcome_subtitle }}"
+      user_fields: "{{ ident_stage.json.results[0].user_fields }}"
+    status_code: [200]
+  when:
+    - not ansible_check_mode
+    - ident_stage.json.results | length > 0
+    - branding.welcome_subtitle is defined
+
+- name: Display branding configured
+  ansible.builtin.debug:
+    msg: "Brand updated: {{ branding.title }} - {{ branding.welcome_title }}"

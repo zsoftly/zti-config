@@ -1,0 +1,21 @@
+{
+  "groups": {
+{% for group, members in headscale_groups.items() %}
+    "group:{{ group }}": {{ members | to_json }}{{ "," if not loop.last else "" }}
+{% endfor %}
+  },
+  "tagOwners": {
+{% for tag, owners in headscale_tag_owners.items() %}
+    "tag:{{ tag }}": {{ owners | to_json }}{{ "," if not loop.last else "" }}
+{% endfor %}
+  },
+  "acls": [
+{% for rule in headscale_acl_rules %}
+    {
+      "action": "accept",
+      "src": {{ rule.src | to_json }},
+      "dst": {{ rule.dst | to_json }}
+    }{{ "," if not loop.last else "" }}
+{% endfor %}
+  ]
+}

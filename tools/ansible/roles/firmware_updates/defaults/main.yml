@@ -1,0 +1,17 @@
+---
+# Firmware Updates Role - Default Variables
+
+# Enable automatic updates
+firmware_auto_update: true
+
+# Force metadata refresh even if recently updated
+firmware_force_refresh: true
+
+# Assume yes to all prompts
+firmware_assume_yes: true
+
+# Skip reboot check (we handle reboots separately)
+firmware_no_reboot_check: true
+
+# Log directory
+firmware_log_dir: /var/log/firmware-updates

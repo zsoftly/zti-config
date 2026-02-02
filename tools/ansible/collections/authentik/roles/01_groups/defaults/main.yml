@@ -1,0 +1,12 @@
+# Authentik Groups Configuration
+---
+authentik_groups:
+  - name: admins
+    is_superuser: true
+
+  - name: developers
+    is_superuser: false
+
+  - name: linux-users
+    is_superuser: false
+    # Used for LDAP/SSSD SSH access

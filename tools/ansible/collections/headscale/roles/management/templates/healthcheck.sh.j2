@@ -1,0 +1,150 @@
+#!/bin/bash
+# Headscale Health Check - Runs via cron, idempotent
+# Managed by Ansible
+# Schedule: {{ headscale_healthcheck_schedule }}
+
+set -o pipefail
+
+COMPOSE_DIR="/opt/headscale"
+HEADSCALE_URL="{{ headscale_domain }}"
+LOG_FILE="/var/log/headscale-healthcheck.log"
+ADVERTISE_ROUTES="{{ headscale_advertise_routes | join(',') }}"
+AWS_VPC_CIDR="{{ aws_vpc_cidr }}"
+
+# Rotate log if > 10MB
+if [ -f "$LOG_FILE" ] && [ $(stat -f%z "$LOG_FILE" 2>/dev/null || stat -c%s "$LOG_FILE") -gt 10485760 ]; then
+  mv "$LOG_FILE" "${LOG_FILE}.old"
+fi
+
+log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" >> "$LOG_FILE"; }
+
+ISSUES_FOUND=0
+ISSUES_FIXED=0
+
+# =============================================================================
+# 1. Check Docker containers (expect 3: headscale, caddy, headplane)
+# =============================================================================
+RUNNING=$(docker compose -f $COMPOSE_DIR/docker-compose.yml ps --format json 2>/dev/null | jq -s '[.[] | select(.State=="running")] | length' 2>/dev/null || echo "0")
+if [ "$RUNNING" -lt 3 ]; then
+  log "WARN: Only $RUNNING/3 containers running, starting..."
+  ISSUES_FOUND=$((ISSUES_FOUND + 1))
+  docker compose -f $COMPOSE_DIR/docker-compose.yml up -d --remove-orphans >> "$LOG_FILE" 2>&1
+  sleep 10
+  ISSUES_FIXED=$((ISSUES_FIXED + 1))
+fi
+
+# =============================================================================
+# 2. Check Headscale health endpoint
+# =============================================================================
+HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 http://localhost:8080/health 2>/dev/null || echo "000")
+if [ "$HTTP_CODE" != "200" ]; then
+  log "WARN: Headscale unhealthy (HTTP $HTTP_CODE), restarting..."
+  ISSUES_FOUND=$((ISSUES_FOUND + 1))
+  docker compose -f $COMPOSE_DIR/docker-compose.yml restart headscale >> "$LOG_FILE" 2>&1
+  sleep 15
+  ISSUES_FIXED=$((ISSUES_FIXED + 1))
+fi
+
+# =============================================================================
+# 3. Check tailscaled service
+# =============================================================================
+if ! systemctl is-active --quiet tailscaled 2>/dev/null; then
+  log "WARN: tailscaled not running, starting..."
+  ISSUES_FOUND=$((ISSUES_FOUND + 1))
+  systemctl start tailscaled
+  sleep 5
+  ISSUES_FIXED=$((ISSUES_FIXED + 1))
+fi
+
+# =============================================================================
+# 4. Check Tailscale connection (subnet router)
+# =============================================================================
+# See docs/TROUBLESHOOTING.md for route advertisement debugging guide.
+# Key point: If clients can't access Cloudflare sites but can reach lab nodes,
+# it's a CLIENT-SIDE issue, not a server issue. Use `hctl routes` to verify
+# server-side routes are being served correctly.
+TS_STATE=$(tailscale status --json 2>/dev/null | jq -r '.BackendState // "Unknown"' 2>/dev/null || echo "Unknown")
+
+if [ "$TS_STATE" != "Running" ]; then
+  log "WARN: Tailscale not connected ($TS_STATE), reconnecting..."
+  ISSUES_FOUND=$((ISSUES_FOUND + 1))
+
+  # Get first user ID
+  USER_ID=$(docker compose -f $COMPOSE_DIR/docker-compose.yml exec -T headscale \
+    headscale users list -o json 2>/dev/null | jq -r '.[0].id' 2>/dev/null || echo "1")
+
+  if [ -n "$USER_ID" ] && [ "$USER_ID" != "null" ]; then
+    # Create preauth key (short expiry for security)
+    AUTHKEY=$(docker compose -f $COMPOSE_DIR/docker-compose.yml exec -T headscale \
+      headscale preauthkeys create --user "$USER_ID" --reusable --expiration 1h --tags tag:subnet-router -o json 2>/dev/null | jq -r '.key' 2>/dev/null)
+
+    if [ -n "$AUTHKEY" ] && [ "$AUTHKEY" != "null" ]; then
+      # Connect as subnet router{% if headscale_exit_node_enabled | default(false) %} and exit node{% endif %}
+
+      tailscale up \
+        --login-server="https://$HEADSCALE_URL" \
+        --authkey="$AUTHKEY" \
+        --advertise-routes="$ADVERTISE_ROUTES" \
+        --accept-routes=false \
+        --hostname={{ headscale_router_hostname }} \
+        --advertise-tags=tag:subnet-router \
+{% if headscale_exit_node_enabled | default(false) %}
+        --advertise-exit-node \
+{% endif %}
+        --reset >> "$LOG_FILE" 2>&1
+
+      sleep 5
+      ISSUES_FIXED=$((ISSUES_FIXED + 1))
+      log "INFO: Tailscale reconnected with routes"
+    else
+      log "ERROR: Failed to create preauth key"
+    fi
+  else
+    log "ERROR: Failed to get user ID"
+  fi
+fi
+
+# =============================================================================
+# 5. Approve routes for subnet router
+# =============================================================================
+ROUTER_ID=$(docker compose -f $COMPOSE_DIR/docker-compose.yml exec -T headscale \
+  headscale nodes list -o json 2>/dev/null | jq -r '.[] | select(.given_name=="{{ headscale_router_hostname }}") | .id' 2>/dev/null)
+
+if [ -n "$ROUTER_ID" ] && [ "$ROUTER_ID" != "null" ]; then
+  # Approve routes (idempotent - safe to run even if already approved)
+  docker compose -f $COMPOSE_DIR/docker-compose.yml exec -T headscale \
+    headscale nodes approve-routes --identifier "$ROUTER_ID" --routes "$ADVERTISE_ROUTES" >> "$LOG_FILE" 2>&1 || true
+fi
+
+# =============================================================================
+# 6. Check iptables rules
+# =============================================================================
+# FORWARD rule for tailscale0
+if ! iptables -C FORWARD -i tailscale0 -j ACCEPT 2>/dev/null; then
+  log "WARN: iptables FORWARD rule missing, adding..."
+  ISSUES_FOUND=$((ISSUES_FOUND + 1))
+  iptables -A FORWARD -i tailscale0 -j ACCEPT
+  ISSUES_FIXED=$((ISSUES_FIXED + 1))
+fi
+
+# Masquerade rule (exclude VPC traffic to preserve source IP)
+if ! iptables -t nat -C POSTROUTING -o {{ ansible_default_ipv4.interface | default('eth0') }} ! -d "$AWS_VPC_CIDR" -j MASQUERADE 2>/dev/null; then
+  log "WARN: iptables masquerade rule missing, adding..."
+  ISSUES_FOUND=$((ISSUES_FOUND + 1))
+  iptables -t nat -A POSTROUTING -o {{ ansible_default_ipv4.interface | default('eth0') }} ! -d "$AWS_VPC_CIDR" -j MASQUERADE
+  ISSUES_FIXED=$((ISSUES_FIXED + 1))
+fi
+
+# Save iptables if changes were made
+if [ $ISSUES_FIXED -gt 0 ]; then
+  netfilter-persistent save >> "$LOG_FILE" 2>&1 || true
+fi
+
+# =============================================================================
+# Summary
+# =============================================================================
+if [ $ISSUES_FOUND -eq 0 ]; then
+  log "OK: All checks passed"
+else
+  log "OK: Health check complete - found $ISSUES_FOUND issues, fixed $ISSUES_FIXED"
+fi

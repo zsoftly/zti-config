@@ -1,0 +1,109 @@
+# Create/Update Google OAuth Source for Google Workspace SSO
+---
+- name: Get existing OAuth sources
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/sources/oauth/"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: existing_sources
+
+- name: Get default enrollment flow
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/flows/instances/?slug=default-source-enrollment"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: enrollment_flow
+
+- name: Get default authentication flow
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/flows/instances/?slug=default-source-authentication"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: auth_flow
+
+- name: Debug existing sources
+  ansible.builtin.debug:
+    msg: "Existing OAuth sources: {{ existing_sources.json.results | map(attribute='slug') | list }}"
+
+- name: Create Google OAuth source
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/sources/oauth/"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      name: "Google Workspace"
+      slug: "google"
+      enabled: true
+      authentication_flow: "{{ auth_flow.json.results[0].pk }}"
+      enrollment_flow: "{{ enrollment_flow.json.results[0].pk }}"
+      provider_type: "google"
+      consumer_key: "{{ google_oauth_client_id }}"
+      consumer_secret: "{{ google_oauth_client_secret }}"
+      additional_scopes: "email profile"
+      user_matching_mode: "identifier"
+      user_path_template: "goauthentik.io/sources/%(slug)s"
+      user_type: "internal"
+    status_code: [200, 201]
+  when: "'google' not in (existing_sources.json.results | map(attribute='slug') | list)"
+  register: google_source_created
+
+- name: Get all sources for UUID lookup
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/sources/all/"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: all_sources
+
+- name: Get Google source UUID
+  ansible.builtin.set_fact:
+    google_source_pk: "{{ (all_sources.json.results | selectattr('slug', 'equalto', 'google') | first).pk }}"
+  when: all_sources.json.results | selectattr('slug', 'equalto', 'google') | list | length > 0
+
+- name: Get identification stage
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/stages/identification/?name=default-authentication-identification"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: identification_stage
+
+- name: Update identification stage to include Google source
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/stages/identification/{{ identification_stage.json.results[0].pk }}/"
+    method: PATCH
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      sources:
+        - "{{ google_source_pk }}"
+    status_code: [200]
+  when:
+    - google_source_pk is defined
+    - google_source_pk not in (identification_stage.json.results[0].sources | default([]))
+  register: stage_updated
+
+- name: Display Google OAuth source status
+  ansible.builtin.debug:
+    msg: |
+      Google OAuth Source: Configured
+      Added to login page: {{ 'Yes' if (stage_updated.changed | default(false)) else 'Already configured' }}
+
+      Redirect URI (for Google Console):
+      {{ authentik_url }}/source/oauth/callback/google/
+
+      Users can now sign in with Google at:
+      {{ authentik_url }}/

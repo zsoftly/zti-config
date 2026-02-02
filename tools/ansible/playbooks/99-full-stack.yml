@@ -1,0 +1,89 @@
+---
+# 99-full-stack.yml
+# Complete Stack: Deploy all services in dependency order
+# Dependencies: All (orchestrates 01-05)
+# Run: ansible-playbook tools/ansible/playbooks/99-full-stack.yml -i inventory/hosts.yml
+#
+# This playbook runs all configuration steps in the correct order:
+#   1. Security baseline (Wazuh)
+#   2. System maintenance (updates + firmware)
+#   3. Monitoring (SigNoz)
+#   4. VPN mesh (Headscale)
+#   5. Identity provider (Authentik)
+
+- name: Deploy Complete Infrastructure Stack
+  hosts: all
+  become: true
+  gather_facts: true
+
+  tasks:
+    - name: Display deployment plan
+      ansible.builtin.debug:
+        msg: |
+          Starting full stack deployment
+
+          Order of operations:
+            [1/5] Base Security (Wazuh agent)
+            [2/5] System Updates (OS + firmware)
+            [3/5] Monitoring (SigNoz collector)
+            [4/5] VPN Mesh (Headscale)
+            [5/5] Identity Provider (Authentik)
+      run_once: true
+      delegate_to: localhost
+      tags: [always]
+
+# Step 1: Security Foundation
+- name: "[1/5] Deploy Base Security"
+  ansible.builtin.import_playbook: 01-base-security.yml
+  tags: [security, wazuh]
+
+# Step 2: System Maintenance
+- name: "[2/5] Configure System Updates"
+  ansible.builtin.import_playbook: 02-system-updates.yml
+  tags: [updates, maintenance]
+
+# Step 3: Monitoring Stack
+- name: "[3/5] Deploy Monitoring"
+  ansible.builtin.import_playbook: 03-monitoring.yml
+  tags: [monitoring, observability]
+
+# Step 4: VPN Mesh Network
+- name: "[4/5] Deploy VPN Mesh"
+  ansible.builtin.import_playbook: 04-vpn-mesh.yml
+  tags: [vpn, headscale]
+
+# Step 5: Identity Provider
+- name: "[5/5] Configure Identity Provider"
+  ansible.builtin.import_playbook: 05-identity.yml
+  tags: [identity, authentik, sso]
+
+# Final Status
+- name: Deployment Complete
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Display completion summary
+      ansible.builtin.debug:
+        msg: |
+
+          ========================================
+          Full Stack Deployment Complete
+          ========================================
+
+          Services deployed:
+            ✓ Wazuh security agent
+            ✓ System updates + firmware
+            ✓ SigNoz OTEL collector
+            ✓ Headscale VPN mesh
+            ✓ Authentik identity provider
+
+          Next steps:
+            1. Verify services are running
+            2. Review logs for any warnings
+            3. Configure service-specific settings
+            4. Run smoke tests
+
+          Documentation: tools/ansible/docs/
+
+      tags: [always]

@@ -1,0 +1,29 @@
+---
+# 01-base-security.yml
+# Foundation: Install Wazuh security agent on all hosts
+# Dependencies: None
+# Run: ansible-playbook tools/ansible/playbooks/01-base-security.yml -i inventory/hosts.yml
+
+- name: Install Wazuh Security Agent
+  hosts: all
+  become: true
+
+  roles:
+    - role: wazuh_agent
+      tags: [wazuh, security]
+
+  post_tasks:
+    - name: Verify Wazuh agent is running
+      ansible.builtin.systemd:
+        name: wazuh-agent
+        state: started
+        enabled: true
+      check_mode: true
+      register: wazuh_status
+      tags: [verify]
+
+    - name: Display Wazuh status
+      ansible.builtin.debug:
+        msg: "Wazuh agent is {{ wazuh_status.status.ActiveState }}"
+      when: wazuh_status is defined
+      tags: [verify]

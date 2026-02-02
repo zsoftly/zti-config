@@ -1,0 +1,92 @@
+---
+# Configure Authentik via API - see README.md for usage
+- name: Configure Authentik
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars_files:
+    - ../vars/authentik.yml
+    - ../vars/vault.yml
+    # Google OAuth credentials (vaulted)
+    - ../vars/google-oauth.yml
+    # Groups and users
+    - ../vars/groups.yml
+    - ../vars/users.yml
+    # OIDC providers
+    - ../vars/oidc-providers.yml
+
+  vars:
+    authentik_token: "{{ vault_authentik_token }}"
+
+  pre_tasks:
+    - name: Validate token retrieved
+      ansible.builtin.assert:
+        that: authentik_token | trim | length > 0
+        fail_msg: "Failed to retrieve token from vault"
+
+    - name: Test API connectivity
+      ansible.builtin.uri:
+        url: "{{ authentik_url }}{{ authentik_api_path }}/core/users/me/"
+        method: GET
+        headers:
+          Authorization: "Bearer {{ authentik_token | trim }}"
+        status_code: 200
+      register: api_test
+      check_mode: false
+
+    - name: Display connection status
+      ansible.builtin.debug:
+        msg: "Connected to {{ authentik_url }} as {{ api_test.json.user.username }}"
+      when: api_test.json is defined
+
+  roles:
+    - role: 01_groups
+      tags: [groups]
+
+    - role: 02_users
+      tags: [users]
+
+    - role: 03_security
+      tags: [security]
+
+    - role: 04_ldap
+      tags: [ldap]
+
+    - role: 05_oidc
+      tags: [oidc]
+
+    - role: 06_google_oauth
+      tags: [google]
+      when: google_oauth_client_id != "REPLACE_WITH_GOOGLE_CLIENT_ID"
+
+    - role: 07_proxy
+      tags: [proxy]
+
+    - role: 08_launchers
+      tags: [launchers]
+
+    - role: 09_scim_defaults
+      tags: [scim_defaults, saml, aws_scim]
+      # Creates SCIM email mapping - needed by saml and aws_scim
+
+    - role: 10_saml
+      tags: [saml]
+
+    - role: 11_branding
+      tags: [branding]
+
+    - role: 12_notifications
+      tags: [notifications]
+
+    - role: 13_aws_scim
+      tags: [aws_scim]
+      # Run with: --tags groups,users,saml,aws_scim for full AWS SSO setup
+
+    - role: 14_password_auth
+      tags: [password_auth, security]
+      # Enables password authentication alongside OAuth
+
+    - role: 16_conditional_mfa
+      tags: [conditional_mfa, mfa, security]
+      # Requires MFA for password login, skips for OAuth

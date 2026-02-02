@@ -1,0 +1,8 @@
+---
+# Backup role defaults
+
+# Cron schedule: minute hour day month weekday
+headscale_backup_schedule: "0 2 * * *"  # 2 AM daily
+
+# Local retention (days)
+headscale_backup_retention_days: 7

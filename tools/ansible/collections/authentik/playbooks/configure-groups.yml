@@ -1,0 +1,23 @@
+---
+- name: Configure Authentik Groups
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars_files:
+    - ../vars/authentik.yml
+    - ../vars/groups.yml
+    - ../vars/vault.yml
+
+  vars:
+    authentik_token: "{{ vault_authentik_token }}"
+
+  pre_tasks:
+    - name: Validate token
+      ansible.builtin.assert:
+        that: authentik_token | length > 0
+        fail_msg: "Failed to retrieve token"
+
+  tasks:
+    - name: Configure groups
+      ansible.builtin.include_tasks: ../tasks/groups.yml

@@ -1,0 +1,41 @@
+# Configure Authentik System Settings via API
+# These settings cannot be configured via environment variables
+---
+
+- name: Get current system settings
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/admin/settings/"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    validate_certs: true
+    status_code: [200]
+  register: current_settings
+
+- name: Display current system settings
+  ansible.builtin.debug:
+    msg: "Current settings: {{ current_settings.json }}"
+    verbosity: 1
+
+- name: Update system settings
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/admin/settings/"
+    method: PUT
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      flags: "{{ current_settings.json.flags | default([]) }}"
+      default_token_duration: "{{ system_settings.default_token_duration }}"
+      default_token_length: "{{ system_settings.default_token_length }}"
+      gdpr_compliance: "{{ system_settings.gdpr_compliance }}"
+      impersonation_require_reason: "{{ system_settings.impersonation_require_reason }}"
+    validate_certs: true
+    status_code: [200]
+  register: update_result
+
+- name: Display updated settings
+  ansible.builtin.debug:
+    msg: "Updated system settings successfully"

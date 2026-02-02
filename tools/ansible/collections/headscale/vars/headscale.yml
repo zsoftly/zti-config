@@ -1,0 +1,300 @@
+---
+# Headscale VPN Configuration
+
+# Domain Configuration
+headscale_domain: "vpn.example.com"
+
+# TLS Certificate
+headscale_acme_staging: false
+headscale_acme_email: "operations@example.com"
+
+# Network Configuration (CGNAT range - doesn't conflict with AWS VPCs)
+headscale_ipv4_prefix: "100.64.0.0/10"
+headscale_ipv6_prefix: "fd7a:115c:a1e0::/48"
+
+# AWS VPC CIDR - used for selective NAT (preserve source IP for VPC traffic)
+aws_vpc_cidr: "10.0.0.0/16"
+
+# =============================================================================
+# Network Segmentation (ACL) - Zero Trust Model
+# =============================================================================
+# See docs/NETWORK-SEGMENTATION.md for design details
+#
+# Device tags: wks=workstation, lab=lab, adm=admin, srv=server, mob=mobile
+# Env tags: npd=non-production, prd=production
+#
+# Zero Trust: Devices without tags have NO access (default deny)
+# Use pre-auth keys to assign tags at registration
+#
+# User namespaces:
+#   inf  = infrastructure (routers, servers, lab nodes)
+#   <username> = per-person (e.g., user1, user2)
+headscale_default_user: "inf"
+
+# Subnet router hostname
+# Pattern: One VPN router per VPC, advertising that VPC's CIDR + Cloudflare IPs.
+# Cost-effective alternative to Transit Gateway for <1.5TB/month cross-VPC traffic.
+# Traffic exits AWS over encrypted WireGuard tunnel (not AWS backbone).
+# Naming: <project>-<env>-vpn-router
+headscale_router_hostname: "example-vpn-router"
+
+# AWS Environment CIDRs
+aws_cidr_npd: "10.0.0.0/16"    # non-prod (current VPC)
+aws_cidr_prd: "10.100.0.0/16"  # prod (future)
+
+headscale_acl_tags:
+  # Role tags
+  - adm   # IT admins (full access)
+  - eng   # Engineers/technical (lab + infra)
+  - ops   # Non-technical (limited access)
+  # Device tags
+  - wks   # workstation
+  - lab   # lab infrastructure
+  - srv   # servers (general)
+  - mob   # mobile/BYOD
+  # Infrastructure tags (one per VPC pattern)
+  - subnet-router  # VPN gateway that advertises VPC CIDR + Cloudflare IPs to clients
+  # Environment tags
+  - npd   # non-production access
+  - prd   # production access
+
+# Groups for ACL - members can own/manage tags
+headscale_groups:
+  admin:
+    - "user1@example.com"
+    - "admin1@example.com"
+
+headscale_tag_owners:
+  # Role tags
+  adm: ["group:admin"]
+  eng: ["group:admin"]
+  ops: ["group:admin"]
+  # Device tags
+  wks: ["group:admin"]
+  lab: ["group:admin"]
+  srv: ["group:admin"]
+  mob: ["group:admin"]
+  # Infrastructure tags
+  subnet-router: ["group:admin"]
+  # Environment tags
+  npd: ["group:admin"]
+  prd: ["group:admin"]
+
+headscale_acl_rules:
+  # --- Admin: full access ---
+  - src: ["tag:adm"]
+    dst: ["*:*"]
+
+  # --- Engineer: lab, srv, Cloudflare ---
+  - src: ["tag:eng"]
+    dst: ["tag:lab:*", "tag:srv:*"]
+  - src: ["tag:eng"]
+    dst: "{{ headscale_cloudflare_ipv4 | map('regex_replace', '$', ':*') | list }}"
+
+  # --- Ops (non-technical): Cloudflare only (internal apps) ---
+  - src: ["tag:ops"]
+    dst: "{{ headscale_cloudflare_ipv4 | map('regex_replace', '$', ':*') | list }}"
+
+  # --- Lab: cluster mesh + srv + non-prod AWS + Cloudflare ---
+  - src: ["tag:lab"]
+    dst: ["tag:lab:*", "tag:srv:*"]
+  - src: ["tag:lab"]
+    dst: ["{{ aws_cidr_npd }}:*"]
+  - src: ["tag:lab"]
+    dst: "{{ headscale_cloudflare_ipv4 | map('regex_replace', '$', ':*') | list }}"
+
+  # --- Server: mesh only ---
+  - src: ["tag:srv"]
+    dst: ["tag:srv:*"]
+
+  # --- Subnet Router: VPN gateway for AWS VPC + Cloudflare access ---
+  # One router per VPC pattern - all clients route through this to reach:
+  # - AWS VPC resources (10.0.0.0/16)
+  # - Cloudflare protected sites (Zero Trust apps)
+  - src: ["tag:adm", "tag:eng", "tag:ops"]
+    dst: ["tag:subnet-router:*"]
+
+  # --- Environment access (combine with role tag) ---
+  - src: ["tag:npd"]
+    dst: ["{{ aws_cidr_npd }}:*"]
+  - src: ["tag:prd"]
+    dst: ["{{ aws_cidr_prd }}:*"]
+
+  # --- AWS NLB access (Wazuh agent enrollment/communication) ---
+  # All roles need access to send logs to Wazuh via NLB
+  - src: ["tag:eng", "tag:lab", "tag:srv"]
+    dst: "{{ headscale_aws_nlb_ips | map('regex_replace', '$', ':*') | list }}"
+
+  # --- Mobile: isolated (no rules = no access) ---
+
+# =============================================================================
+# Split Tunnel Routes - Only these CIDRs route through VPN
+# =============================================================================
+# Matches WireGuard behavior: VPC + Cloudflare, everything else goes direct
+
+# Cloudflare IPv4 ranges (from https://www.cloudflare.com/ips/)
+# Required for Cloudflare Zero Trust Access protected sites (dev, stg, etc.)
+# Last updated: 2026-01-13
+headscale_cloudflare_ipv4:
+  - "173.245.48.0/20"
+  - "103.21.244.0/22"
+  - "103.22.200.0/22"
+  - "103.31.4.0/22"
+  - "141.101.64.0/18"
+  - "108.162.192.0/18"
+  - "190.93.240.0/20"
+  - "188.114.96.0/20"
+  - "197.234.240.0/22"
+  - "198.41.128.0/17"
+  - "162.158.0.0/15"
+  - "104.16.0.0/13"
+  - "104.24.0.0/14"
+  - "172.64.0.0/13"
+  - "131.0.72.0/22"
+
+# Cloudflare IPv6 ranges
+headscale_cloudflare_ipv6:
+  - "2400:cb00::/32"
+  - "2606:4700::/32"
+  - "2803:f800::/32"
+  - "2405:b500::/32"
+  - "2405:8100::/32"
+  - "2a06:98c0::/29"
+  - "2c0f:f248::/32"
+
+# AWS NLB IPs that should route through VPN
+# Required for services exposed via Traefik NLB where SG restricts source IPs
+# Traffic exits at Headscale (<your-headscale-public-ip>) which is allowed by the SG
+# Note: NLB IPs may change if NLB is recreated - update if connectivity breaks
+# Current NLB: <your-nlb-name>.elb.<region>.amazonaws.com
+headscale_aws_nlb_ips:
+  - "198.51.100.3/32"   # Traefik NLB - Wazuh ports 1514/1515 (replace with your NLB IP)
+
+# Combined advertised routes (VPC + Cloudflare IPv4 + IPv6 + AWS NLB)
+headscale_advertise_routes: "{{ [aws_vpc_cidr] + headscale_cloudflare_ipv4 + headscale_cloudflare_ipv6 + headscale_aws_nlb_ips }}"
+
+# =============================================================================
+# Exit Node Configuration
+# =============================================================================
+# When enabled, Headscale acts as an exit node for VPN clients.
+# Clients can route ALL internet traffic through Headscale using:
+# Exit node is DISABLED (2026-01-11)
+# Caused routing issues on clients - table 52 captured all traffic including LAN
+# Clients lost connectivity when exit node had issues
+# Lab nodes now route directly to internet without exit node
+headscale_exit_node_enabled: false
+
+# DNS Configuration (for VPN clients)
+headscale_dns_servers:
+  - "10.0.0.2"     # AWS VPC DNS resolver
+  - "1.1.1.1"      # Cloudflare fallback
+
+# Split DNS - disabled
+# Not needed: internal services are behind Cloudflare (public DNS works)
+# VPC resources resolve via global DNS (10.0.0.2 primary, 1.1.1.1 fallback)
+headscale_split_dns: {}
+
+# Magic DNS base domain (devices: <hostname>.vpn.vpn.example.com)
+# Cannot be same as server_url domain
+headscale_base_domain: "vpn.vpn.example.com"
+
+# =============================================================================
+# Docker Image Versions - PINNED for reproducibility
+# =============================================================================
+# Update these versions after testing in non-production
+# Check for updates: https://github.com/juanfont/headscale/releases
+
+# Headscale image - multi-arch (amd64/arm64)
+# Check releases: https://github.com/juanfont/headscale/releases
+headscale_version: "0.27.1"
+
+# =============================================================================
+# Admin UI - Headplane (https://github.com/tale/headplane)
+# =============================================================================
+# Migrated from headscale-admin due to headscale 0.27.x API incompatibility
+# See README.md for UI comparison table
+#
+# Headplane features:
+# - Full headscale 0.27.x support with compatibility matrix
+# - Routes, ACLs, DNS, tags management
+# - Real-time data via tailnet integration
+# - Tailscale-like interface
+headplane_version: "0.6.2-beta.3"
+headplane_enabled: true
+# Cookie secret for session encryption (32 chars, from vault)
+headplane_cookie_secret: "{{ vault_headplane_cookie_secret }}"
+
+# DERP configuration
+headscale_derp_enabled: true
+
+# Metrics
+headscale_metrics_enabled: true
+headscale_metrics_port: 9090
+
+# =============================================================================
+# Backup Configuration
+# =============================================================================
+headscale_backup_bucket: "example-headscale-backups"
+headscale_backup_retention_days: 30
+headscale_backup_schedule: "0 2 * * *"  # 2 AM daily
+
+# =============================================================================
+# Health Check Configuration
+# =============================================================================
+# Cron schedule for health check script (idempotent, auto-repairs VPN issues)
+headscale_healthcheck_schedule: "*/10 * * * *"  # Every 10 minutes
+
+# =============================================================================
+# OIDC / SSO Configuration (Authentik)
+# =============================================================================
+# Users authenticate via Authentik (Google Workspace SSO) to connect to VPN
+headscale_oidc_enabled: true
+headscale_oidc_issuer: "https://auth.example.com/application/o/headscale/"
+headscale_oidc_client_id: "{{ vault_headscale_oidc_client_id }}"
+headscale_oidc_client_secret: "{{ vault_headscale_oidc_client_secret }}"
+# Allow all email domains (global team across multiple domains)
+headscale_oidc_allowed_domains: []
+# Allow all groups (no group restrictions)
+headscale_oidc_allowed_groups: []
+
+# =============================================================================
+# Headplane OIDC Configuration (Admin UI authentication)
+# =============================================================================
+# Headplane admin UI authenticates via Authentik (separate from VPN OIDC)
+headplane_oidc_enabled: true
+headplane_oidc_issuer: "https://auth.example.com/application/o/headplane/"
+headplane_oidc_client_id: "{{ vault_headplane_oidc_client_id }}"
+headplane_oidc_client_secret: "{{ vault_headplane_oidc_client_secret }}"
+# Redirect URI: https://vpn.example.com/admin/oidc/callback
+# API key for Headplane to manage Headscale (create with: headscale apikeys create --expiration 999d)
+headplane_api_key: "{{ vault_headplane_api_key }}"
+# Disable API key login (OIDC only)
+headplane_disable_api_key_login: true
+
+# =============================================================================
+# Observability - SigNoz OTEL
+# =============================================================================
+otel_enabled: true
+# Single NLB endpoint (gRPC, no TLS - for VPC clients)
+otel_endpoint: "signoz.example.com:4317"
+otel_insecure: true  # No TLS for VPC traffic
+# Docker metrics for container monitoring (headscale, caddy, headplane)
+otel_docker_metrics: true
+# Docker container logs (headscale, caddy, headplane)
+otel_docker_logs: true
+headscale_environment: "sbx"
+
+# =============================================================================
+# Wazuh Agent - Security Monitoring
+# =============================================================================
+# Monitors system security events, file integrity, and compliance
+wazuh_agent_enabled: true
+
+# Enrollment authentication (from vault)
+wazuh_authd_password: "{{ vault_wazuh_authd_password }}"
+
+# Custom log monitoring (application-specific logs)
+wazuh_custom_localfiles:
+  # Headscale application logs (JSON with VPN connection tracking)
+  - location: "/var/log/headscale/*.log"
+    log_format: "syslog"

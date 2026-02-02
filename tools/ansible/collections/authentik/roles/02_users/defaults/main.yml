@@ -1,0 +1,4 @@
+# Default values for 07_users role
+# Override in vars/users.yml
+---
+authentik_users: []

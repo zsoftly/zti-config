@@ -1,0 +1,39 @@
+# LDAP Provider Configuration
+---
+# Kubernetes service details for internal outpost communication
+authentik_k8s_service:
+  name: "p10-authentik-server"
+  namespace: "authentik"
+  port: 80
+
+ldap_provider:
+  name: "example-ldap"
+  base_dn: "dc=example,dc=com"
+  search_mode: "cached"
+  bind_mode: "direct"
+  mfa_support: false
+  # Note: search_group was deprecated in Authentik 2024.8
+  # Use RBAC permission "search_full_directory" instead (assigned below)
+
+ldap_application:
+  name: "Linux Servers"
+  slug: "linux-servers"
+
+ldap_outpost:
+  name: "ldap-outpost"
+  log_level: "info"
+
+# LDAP service account for SSSD binds
+# Gets "search_full_directory" RBAC permission to query LDAP directory
+# Bind DN format: https://docs.goauthentik.io/add-secure-apps/providers/ldap/generic_setup/
+ldap_service_account:
+  username: "ldapservice"
+  # Full bind DN for LDAP clients (SSSD, CloudStack, etc.)
+  # Format: cn=ldapservice,ou=users,dc=example,dc=com
+  # Password variable from vault: vault_ldapservice_password
+
+# Superuser group for ldapservice (workaround for bug #11548)
+# LDAP service account needs full directory access but RBAC permission doesn't work
+# Solution: Add to superuser group - inherits is_superuser from group membership
+# See: https://github.com/goauthentik/authentik/issues/11548
+ldap_service_superuser_group: "authentik Admins"  # Built-in Authentik superuser group

@@ -1,0 +1,114 @@
+---
+# Headscale Status Check Playbook
+# Checks the status of Headscale components
+#
+# Usage:
+#   ansible-playbook playbooks/headscale-status.yml
+
+- name: Check Headscale VPN Server Status
+  hosts: all
+  become: true
+  gather_facts: true
+
+  vars_files:
+    - ../vars/headscale.yml
+
+  tasks:
+    - name: Check Docker service status
+      ansible.builtin.systemd:
+        name: docker
+      register: docker_status
+
+    - name: Display Docker status
+      ansible.builtin.debug:
+        msg: "Docker service: {{ docker_status.status.ActiveState }}"
+
+    - name: Check container status
+      ansible.builtin.command:
+        cmd: docker compose ps --format json
+        chdir: /opt/headscale
+      register: containers
+      changed_when: false
+
+    - name: Display container status
+      ansible.builtin.command:
+        cmd: docker compose ps
+        chdir: /opt/headscale
+      register: container_table
+      changed_when: false
+
+    - name: Show container table
+      ansible.builtin.debug:
+        var: container_table.stdout_lines
+
+    - name: Check health endpoint
+      ansible.builtin.uri:
+        url: "http://localhost:8080/health"
+        method: GET
+        status_code: [200, 404]
+      register: health_check
+      ignore_errors: true
+
+    - name: Display health status
+      ansible.builtin.debug:
+        msg: "Health check: {{ health_check.status | default('FAILED') }}"
+
+    - name: List Headscale users
+      ansible.builtin.command:
+        cmd: docker compose exec -T headscale headscale users list
+        chdir: /opt/headscale
+      register: users_list
+      changed_when: false
+      ignore_errors: true
+
+    - name: Display users
+      ansible.builtin.debug:
+        var: users_list.stdout_lines
+      when: users_list.rc == 0
+
+    - name: List Headscale nodes
+      ansible.builtin.command:
+        cmd: docker compose exec -T headscale headscale nodes list
+        chdir: /opt/headscale
+      register: nodes_list
+      changed_when: false
+      ignore_errors: true
+
+    - name: Display nodes
+      ansible.builtin.debug:
+        var: nodes_list.stdout_lines
+      when: nodes_list.rc == 0
+
+    - name: Check disk usage
+      ansible.builtin.command:
+        cmd: df -h /opt/headscale
+      register: disk_usage
+      changed_when: false
+
+    - name: Display disk usage
+      ansible.builtin.debug:
+        var: disk_usage.stdout_lines
+
+    - name: Check memory usage
+      ansible.builtin.command:
+        cmd: docker stats --no-stream --format "table {{ '{{' }}.Name{{ '}}' }}\t{{ '{{' }}.CPUPerc{{ '}}' }}\t{{ '{{' }}.MemUsage{{ '}}' }}"
+      register: docker_stats
+      changed_when: false
+
+    - name: Display resource usage
+      ansible.builtin.debug:
+        var: docker_stats.stdout_lines
+
+    - name: Summary
+      ansible.builtin.debug:
+        msg: |
+          === Headscale Status Summary ===
+
+          Server: {{ inventory_hostname }}
+          URL: https://{{ headscale_domain }}
+          Docker: {{ docker_status.status.ActiveState }}
+          Health: {{ health_check.status | default('FAILED') }}
+
+          To view logs: hctl l
+          To list users: hctl u
+          To list nodes: hctl n

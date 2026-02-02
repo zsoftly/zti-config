@@ -1,0 +1,32 @@
+# Create Authentik Groups
+---
+- name: Get existing groups
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/core/groups/"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: existing_groups
+
+- name: Create groups
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/core/groups/"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      name: "{{ item.name }}"
+      is_superuser: "{{ item.is_superuser | default(false) }}"
+    status_code: [200, 201]
+  loop: "{{ authentik_groups }}"
+  when: item.name not in (existing_groups.json.results | map(attribute='name') | list)
+  register: created_groups
+
+- name: Display created groups
+  ansible.builtin.debug:
+    msg: "Created group: {{ item.item.name }}"
+  loop: "{{ created_groups.results }}"
+  when: item.changed | default(false)

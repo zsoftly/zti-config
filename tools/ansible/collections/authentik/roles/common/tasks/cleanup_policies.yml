@@ -1,0 +1,76 @@
+# Shared Policy Binding Cleanup Task
+# Removes orphaned policy bindings and policies for apps/providers that no longer have groups defined
+#
+# Required variables:
+#   cleanup_items: list of items (e.g., oidc_providers, launcher_apps)
+#   cleanup_slug_attr: attribute name for slug (e.g., 'app_slug' or 'slug')
+#   cleanup_bindings: API response with existing bindings (must have .json.results)
+#   cleanup_policies: API response with existing policies (must have .json.results)
+---
+- name: Build list of items without groups
+  ansible.builtin.set_fact:
+    items_without_groups: "{{ cleanup_items | rejectattr('groups', 'defined') | list }}"
+
+- name: Find orphaned policy bindings (items without groups that still have bindings)
+  ansible.builtin.set_fact:
+    orphaned_bindings: >-
+      {{
+        cleanup_bindings.json.results | selectattr('policy_obj', 'defined') |
+        selectattr('policy_obj.name', 'defined') |
+        selectattr('policy_obj.name', 'match', '^(' ~ (items_without_groups | map(attribute=cleanup_slug_attr) | join('|')) ~ ')-group-access$') |
+        list
+      }}
+  when: items_without_groups | length > 0
+
+- name: Show orphaned bindings that would be removed (check mode)
+  ansible.builtin.debug:
+    msg: "Would delete policy binding for: {{ item.policy_obj.name }}"
+  loop: "{{ orphaned_bindings | default([]) }}"
+  loop_control:
+    label: "{{ item.policy_obj.name | default('unknown') }}"
+  when:
+    - ansible_check_mode
+    - orphaned_bindings is defined
+    - orphaned_bindings | length > 0
+
+- name: Delete orphaned policy bindings
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/policies/bindings/{{ item.pk }}/"
+    method: DELETE
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: [204]
+  loop: "{{ orphaned_bindings | default([]) }}"
+  loop_control:
+    label: "{{ item.policy_obj.name | default('unknown') }}"
+  when:
+    - not ansible_check_mode
+    - orphaned_bindings is defined
+    - orphaned_bindings | length > 0
+
+- name: Find orphaned policies (policies for items without groups)
+  ansible.builtin.set_fact:
+    orphaned_policies: >-
+      {{
+        cleanup_policies.json.results |
+        selectattr('name', 'match', '^(' ~ (items_without_groups | map(attribute=cleanup_slug_attr) | join('|')) ~ ')-group-access$') |
+        list
+      }}
+  when:
+    - items_without_groups | length > 0
+    - cleanup_policies is defined
+
+- name: Delete orphaned policies
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/policies/expression/{{ item.pk }}/"
+    method: DELETE
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: [204]
+  loop: "{{ orphaned_policies | default([]) }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when:
+    - not ansible_check_mode
+    - orphaned_policies is defined
+    - orphaned_policies | length > 0

@@ -1,0 +1,156 @@
+---
+# Generate Pre-Auth Key for Headscale VPN
+#
+# Creates a user namespace (if needed) and generates a pre-auth key with
+# role-based tags for zero-trust access control.
+#
+# Prerequisites:
+#   export HEADSCALE_ANSIBLE_VAULT_PASS="your-vault-password"
+#
+# Usage:
+#   # Engineer (lab + servers + non-prod AWS)
+#   ansible-playbook playbooks/generate-key.yml -e "username=user2 role=eng"
+#
+#   # Engineer with prod access
+#   ansible-playbook playbooks/generate-key.yml -e "username=user2 role=eng prod_access=true"
+#
+#   # Ops (internal apps only)
+#   ansible-playbook playbooks/generate-key.yml -e "username=sarah.m role=ops"
+#
+#   # Admin (full access)
+#   ansible-playbook playbooks/generate-key.yml -e "username=user1 role=adm"
+#
+#   # Infrastructure (lab node)
+#   ansible-playbook playbooks/generate-key.yml -e "username=inf role=lab reusable=true"
+#
+#   # Infrastructure (server)
+#   ansible-playbook playbooks/generate-key.yml -e "username=inf role=srv reusable=true"
+#
+# Parameters:
+#   username     - User namespace (e.g., "user2" for people, "inf" for infrastructure)
+#   role         - Role tag: adm, eng, ops, lab, srv
+#   prod_access  - Add prd tag for production access (default: false)
+#   reusable     - Make key reusable for multiple devices (default: false)
+#   expiry       - Key expiry duration (default: 720h = 30 days)
+
+- name: Generate Pre-Auth Key
+  hosts: all
+  become: true
+  gather_facts: false
+
+  vars:
+    # Defaults
+    prod_access: false
+    reusable: false
+    expiry: "720h"
+    compose_dir: "/opt/headscale"
+
+    # Role to tag mapping
+    role_tags:
+      adm: ["adm"]
+      eng: ["eng", "npd"]
+      ops: ["ops"]
+      lab: ["lab"]
+      srv: ["srv"]
+
+  tasks:
+    - name: Validate required parameters
+      ansible.builtin.assert:
+        that:
+          - username is defined
+          - username | length > 0
+          - role is defined
+          - role in role_tags
+        fail_msg: |
+          Missing or invalid parameters.
+          Required: username, role
+          Valid roles: adm, eng, ops, lab, srv
+          Example: -e "username=user2 role=eng"
+
+    - name: Build tags list
+      ansible.builtin.set_fact:
+        key_tags: >-
+          {{
+            role_tags[role] +
+            (['prd'] if prod_access | bool else [])
+          }}
+
+    - name: Format tags string for headscale
+      ansible.builtin.set_fact:
+        tags_string: "{{ key_tags | map('regex_replace', '^', 'tag:') | join(',') }}"
+
+    - name: Check if user exists
+      ansible.builtin.shell: |
+        cd {{ compose_dir }} && docker compose exec -T headscale headscale users list -o json | jq -r '.[].name'
+      register: existing_users
+      changed_when: false
+
+    - name: Create user namespace if not exists
+      ansible.builtin.shell: |
+        cd {{ compose_dir }} && docker compose exec -T headscale headscale users create "{{ username }}"
+      when: username not in existing_users.stdout_lines
+      register: user_created
+
+    - name: Get user ID
+      ansible.builtin.shell: |
+        cd {{ compose_dir }} && docker compose exec -T headscale headscale users list -o json | \
+          jq -r '.[] | select(.name == "{{ username }}") | .id'
+      register: user_id_result
+      changed_when: false
+
+    - name: Validate user ID
+      ansible.builtin.assert:
+        that:
+          - user_id_result.stdout | length > 0
+        fail_msg: "Failed to get user ID for {{ username }}"
+
+    - name: Generate pre-auth key
+      ansible.builtin.shell: |
+        cd {{ compose_dir }} && docker compose exec -T headscale headscale preauthkeys create \
+          -u "{{ user_id_result.stdout }}" \
+          --tags "{{ tags_string }}" \
+          -e "{{ expiry }}" \
+          {{ '--reusable' if reusable | bool else '' }} \
+          -o json
+      register: key_result
+
+    - name: Parse key from JSON output
+      ansible.builtin.set_fact:
+        preauth_key: "{{ (key_result.stdout | from_json).key }}"
+        key_expiration: "{{ (key_result.stdout | from_json).expiration }}"
+
+    - name: Display generated key
+      ansible.builtin.debug:
+        msg: |
+          ============================================================
+          PRE-AUTH KEY GENERATED
+          ============================================================
+
+          User:       {{ username }}
+          Role:       {{ role }}
+          Tags:       {{ key_tags | join(', ') }}
+          Expiry:     {{ key_expiration }}
+          Reusable:   {{ reusable | bool }}
+
+          KEY:
+          {{ preauth_key }}
+
+          ============================================================
+          NEXT STEPS
+          ============================================================
+
+          1. Send this key to the user via secure channel (1Password, etc.)
+
+          2. User runs the install script:
+
+             # macOS / Linux
+             curl -fsSL https://raw.githubusercontent.com/example/tools/main/vpn/install.sh | bash -s -- \
+               --server https://vpn.example.com \
+               --key {{ preauth_key }}
+
+             # Windows (PowerShell as Admin)
+             & ([scriptblock]::Create((irm https://raw.githubusercontent.com/example/tools/main/vpn/install.ps1))) `
+               -Server https://vpn.example.com `
+               -Key {{ preauth_key }}
+
+          ============================================================

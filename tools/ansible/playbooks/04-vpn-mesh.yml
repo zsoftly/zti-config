@@ -1,0 +1,29 @@
+---
+# 04-vpn-mesh.yml
+# VPN Mesh: Install and configure Headscale VPN
+# Dependencies: 01-base-security.yml (Wazuh agent recommended)
+# Run: ansible-playbook tools/ansible/playbooks/04-vpn-mesh.yml -i inventory/hosts.yml
+#
+# For complete Headscale setup, see:
+#   tools/ansible/collections/headscale/playbooks/headscale-install.yml
+
+- name: Install Headscale VPN Mesh Network
+  hosts: headscale
+  become: true
+
+  tasks:
+    - name: Include Headscale collection playbook
+      ansible.builtin.import_playbook: ../collections/headscale/playbooks/headscale-install.yml
+      tags: [headscale, vpn]
+
+  post_tasks:
+    - name: Display Headscale info
+      ansible.builtin.debug:
+        msg: |
+          Headscale installation complete.
+
+          Next steps:
+          1. Verify: ansible-playbook collections/headscale/playbooks/headscale-status.yml
+          2. Backup: ansible-playbook collections/headscale/playbooks/headscale-backup.yml
+          3. Management: See collections/headscale/README.md for details
+      tags: [info]

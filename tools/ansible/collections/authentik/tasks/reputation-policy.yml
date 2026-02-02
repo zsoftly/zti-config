@@ -1,0 +1,171 @@
+# Configure Reputation Policy
+# Tracks failed login attempts and triggers additional verification
+---
+
+- name: Get existing reputation policies
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/policies/reputation/"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: existing_reputation_policies
+  check_mode: false
+
+- name: Find existing reputation policy
+  ansible.builtin.set_fact:
+    existing_reputation_policy: "{{ existing_reputation_policies.json.results | selectattr('name', 'equalto', reputation_policy.name) | first | default(None) }}"
+
+- name: Set reputation policy state
+  ansible.builtin.set_fact:
+    reputation_policy_exists: "{{ existing_reputation_policy is not none and existing_reputation_policy != None }}"
+    existing_reputation_pk: "{{ existing_reputation_policy.pk | default('') if existing_reputation_policy is not none and existing_reputation_policy != None else '' }}"
+
+- name: Create reputation policy
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/policies/reputation/"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      name: "{{ reputation_policy.name }}"
+      execution_logging: true
+      threshold: "{{ reputation_policy.threshold }}"
+      check_ip: "{{ reputation_policy.check_ip }}"
+      check_username: "{{ reputation_policy.check_username }}"
+    status_code: [200, 201]
+  when:
+    - not ansible_check_mode
+    - not reputation_policy_exists
+  register: created_reputation_policy
+
+- name: Update existing reputation policy
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/policies/reputation/{{ existing_reputation_pk }}/"
+    method: PUT
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      name: "{{ reputation_policy.name }}"
+      execution_logging: true
+      threshold: "{{ reputation_policy.threshold }}"
+      check_ip: "{{ reputation_policy.check_ip }}"
+      check_username: "{{ reputation_policy.check_username }}"
+    status_code: [200]
+  when:
+    - not ansible_check_mode
+    - reputation_policy_exists
+    - existing_reputation_pk | length > 0
+  register: updated_reputation_policy
+
+# Properly determine the policy PK
+- name: Set reputation policy PK from created policy
+  ansible.builtin.set_fact:
+    reputation_policy_pk: "{{ created_reputation_policy.json.pk }}"
+  when:
+    - created_reputation_policy is defined
+    - created_reputation_policy is not skipped
+    - created_reputation_policy.json is defined
+    - created_reputation_policy.json.pk is defined
+
+- name: Set reputation policy PK from existing policy
+  ansible.builtin.set_fact:
+    reputation_policy_pk: "{{ existing_reputation_pk }}"
+  when:
+    - reputation_policy_pk is not defined
+    - existing_reputation_pk | length > 0
+
+# Bind policy to identification stage in authentication flow
+- name: Get authentication flow
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/flows/instances/?slug=default-authentication-flow"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: auth_flow
+  check_mode: false
+
+- name: Set authentication flow PK
+  ansible.builtin.set_fact:
+    auth_flow_pk: "{{ auth_flow.json.results[0].pk }}"
+  when: auth_flow.json.results | length > 0
+
+# Get flow stage bindings to find the identification stage
+- name: Get flow stage bindings
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/flows/bindings/?target={{ auth_flow_pk }}"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: flow_stage_bindings
+  check_mode: false
+
+# Find the identification stage binding
+- name: Find identification stage binding
+  ansible.builtin.set_fact:
+    identification_stage_binding: "{{ flow_stage_bindings.json.results | selectattr('stage_obj.component', 'defined') | selectattr('stage_obj.component', 'equalto', 'ak-stage-identification-form') | first | default(None) }}"
+
+- name: Set policy binding target
+  ansible.builtin.set_fact:
+    policy_binding_target: "{{ identification_stage_binding.policybindingmodel_ptr_id }}"
+  when: identification_stage_binding is not none and identification_stage_binding != None
+
+# Get existing policy bindings for this stage
+- name: Get existing policy bindings
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/policies/bindings/?target={{ policy_binding_target }}"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: existing_policy_bindings
+  check_mode: false
+  when: policy_binding_target is defined
+
+# Check if reputation policy is already bound
+- name: Check if reputation policy already bound
+  ansible.builtin.set_fact:
+    reputation_binding_exists: "{{ existing_policy_bindings.json.results | selectattr('policy', 'defined') | selectattr('policy', 'equalto', reputation_policy_pk) | list | length > 0 }}"
+  when:
+    - reputation_policy_pk is defined
+    - reputation_policy_pk | length > 0
+    - existing_policy_bindings is defined
+
+- name: Default reputation binding exists to false
+  ansible.builtin.set_fact:
+    reputation_binding_exists: false
+  when: reputation_binding_exists is not defined
+
+# Create policy binding
+- name: Create policy binding for reputation
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/policies/bindings/"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      policy: "{{ reputation_policy_pk }}"
+      target: "{{ policy_binding_target }}"
+      order: 0
+      enabled: true
+      timeout: 30
+    status_code: [200, 201]
+  when:
+    - not ansible_check_mode
+    - reputation_policy_pk is defined
+    - reputation_policy_pk | length > 0
+    - policy_binding_target is defined
+    - not reputation_binding_exists
+  register: created_policy_binding
+
+- name: Display reputation policy status
+  ansible.builtin.debug:
+    msg: "Reputation policy '{{ reputation_policy.name }}' configured (threshold={{ reputation_policy.threshold }})"

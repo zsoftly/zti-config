@@ -1,0 +1,334 @@
+# Configure MFA Stages (TOTP, WebAuthn, Validation)
+---
+
+# TOTP Authenticator Setup Stage
+- name: Get existing TOTP setup stages
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/stages/authenticator/totp/"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: existing_totp_stages
+
+- name: Check if TOTP stage exists
+  ansible.builtin.set_fact:
+    totp_stage_exists: "{{ mfa_config.totp_stage.name in (existing_totp_stages.json.results | map(attribute='name') | list) }}"
+    existing_totp_pk: "{{ (existing_totp_stages.json.results | selectattr('name', 'equalto', mfa_config.totp_stage.name) | first).pk | default('') }}"
+
+- name: Create TOTP setup stage
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/stages/authenticator/totp/"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      name: "{{ mfa_config.totp_stage.name }}"
+      friendly_name: "{{ mfa_config.totp_stage.friendly_name }}"
+      configure_flow: null
+      digits: "{{ mfa_config.totp_stage.digits }}"
+    status_code: [200, 201]
+  when: not totp_stage_exists
+  register: created_totp_stage
+
+- name: Set TOTP stage PK
+  ansible.builtin.set_fact:
+    totp_stage_pk: "{{ created_totp_stage.json.pk | default(existing_totp_pk) }}"
+
+# WebAuthn Authenticator Setup Stage
+- name: Get existing WebAuthn setup stages
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/stages/authenticator/webauthn/"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: existing_webauthn_stages
+
+- name: Check if WebAuthn stage exists
+  ansible.builtin.set_fact:
+    webauthn_stage_exists: "{{ mfa_config.webauthn_stage.name in (existing_webauthn_stages.json.results | map(attribute='name') | list) }}"
+    existing_webauthn_pk: "{{ (existing_webauthn_stages.json.results | selectattr('name', 'equalto', mfa_config.webauthn_stage.name) | first).pk | default('') }}"
+
+- name: Create WebAuthn setup stage
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/stages/authenticator/webauthn/"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      name: "{{ mfa_config.webauthn_stage.name }}"
+      friendly_name: "{{ mfa_config.webauthn_stage.friendly_name }}"
+      configure_flow: null
+      resident_key_requirement: "{{ mfa_config.webauthn_stage.resident_key_requirement }}"
+      user_verification: "{{ mfa_config.webauthn_stage.user_verification }}"
+    status_code: [200, 201]
+  when: not webauthn_stage_exists
+  register: created_webauthn_stage
+
+- name: Set WebAuthn stage PK
+  ansible.builtin.set_fact:
+    webauthn_stage_pk: "{{ created_webauthn_stage.json.pk | default(existing_webauthn_pk) }}"
+
+# Static Token (Recovery Codes) Stage - use default
+- name: Get default static authenticator stage
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/stages/authenticator/static/?name=default-authenticator-static-setup"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: default_static_stage
+
+- name: Set static stage PK
+  ansible.builtin.set_fact:
+    static_stage_pk: "{{ default_static_stage.json.results[0].pk | default('') }}"
+  when: default_static_stage.json.results | length > 0
+
+# MFA Validation Stage
+- name: Get existing authenticator validation stages
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/stages/authenticator/validate/"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: existing_validation_stages
+
+- name: Check if validation stage exists
+  ansible.builtin.set_fact:
+    validation_stage_exists: "{{ mfa_config.validation_stage.name in (existing_validation_stages.json.results | map(attribute='name') | list) }}"
+    existing_validation_pk: "{{ (existing_validation_stages.json.results | selectattr('name', 'equalto', mfa_config.validation_stage.name) | first).pk | default('') }}"
+
+- name: Create MFA validation stage
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/stages/authenticator/validate/"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      name: "{{ mfa_config.validation_stage.name }}"
+      device_classes: "{{ mfa_config.validation_stage.device_classes }}"
+      not_configured_action: "{{ mfa_config.validation_stage.not_configured_action }}"
+      last_auth_threshold: "{{ mfa_config.validation_stage.last_auth_threshold }}"
+      configuration_stages:
+        - "{{ totp_stage_pk }}"
+        - "{{ webauthn_stage_pk }}"
+    status_code: [200, 201]
+  when: not validation_stage_exists
+  register: created_validation_stage
+
+- name: Update existing MFA validation stage
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/stages/authenticator/validate/{{ existing_validation_pk }}/"
+    method: PATCH
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      device_classes: "{{ mfa_config.validation_stage.device_classes }}"
+      not_configured_action: "{{ mfa_config.validation_stage.not_configured_action }}"
+      last_auth_threshold: "{{ mfa_config.validation_stage.last_auth_threshold }}"
+      configuration_stages:
+        - "{{ totp_stage_pk }}"
+        - "{{ webauthn_stage_pk }}"
+    status_code: [200]
+  when: validation_stage_exists
+  register: updated_validation_stage
+
+- name: Set validation stage PK
+  ansible.builtin.set_fact:
+    validation_stage_pk: "{{ created_validation_stage.json.pk | default(existing_validation_pk) }}"
+
+# Create MFA conditional policy (requires MFA for password login, skips for OAuth)
+- name: Get existing expression policies for MFA
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/policies/expression/"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: existing_mfa_expression_policies
+  check_mode: false
+
+- name: Check if MFA conditional policy exists
+  ansible.builtin.set_fact:
+    mfa_conditional_policy_exists: "{{ 'example-require-mfa-for-password' in (existing_mfa_expression_policies.json.results | map(attribute='name') | list) }}"
+    existing_mfa_conditional_pk: "{{ (existing_mfa_expression_policies.json.results | selectattr('name', 'equalto', 'example-require-mfa-for-password') | first).pk | default('') }}"
+
+- name: Build MFA conditional policy expression
+  ansible.builtin.set_fact:
+    mfa_conditional_expression: |
+      # Check if user authenticated via an OAuth source
+      # OAuth authentications have 'source' in the flow context
+      source = request.context.get("source", None)
+
+      # If source is set (OAuth authentication), skip MFA
+      if source is not None:
+          # Authenticated via OAuth source (Google, etc.)
+          ak_message("OAuth authentication detected, skipping MFA")
+          return False
+
+      # Check if this is a password-based authentication
+      # Password auth goes through the password stage which sets pending_user
+      pending_user = request.context.get("pending_user", None)
+
+      if pending_user is not None:
+          # Password authentication - require MFA
+          ak_message("Password authentication detected, requiring MFA")
+          return True
+
+      # Default: require MFA for safety
+      return True
+
+- name: Create MFA conditional policy
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/policies/expression/"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      name: "example-require-mfa-for-password"
+      execution_logging: true
+      expression: "{{ mfa_conditional_expression }}"
+    status_code: [200, 201]
+  when:
+    - not ansible_check_mode
+    - not mfa_conditional_policy_exists
+  register: created_mfa_conditional_policy
+
+- name: Update existing MFA conditional policy
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/policies/expression/{{ existing_mfa_conditional_pk }}/"
+    method: PUT
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      name: "example-require-mfa-for-password"
+      execution_logging: true
+      expression: "{{ mfa_conditional_expression }}"
+    status_code: [200]
+  when:
+    - not ansible_check_mode
+    - mfa_conditional_policy_exists
+    - existing_mfa_conditional_pk | length > 0
+  register: updated_mfa_conditional_policy
+
+# Properly determine the MFA conditional policy PK
+- name: Set MFA conditional policy PK from created policy
+  ansible.builtin.set_fact:
+    mfa_conditional_policy_pk: "{{ created_mfa_conditional_policy.json.pk }}"
+  when:
+    - created_mfa_conditional_policy is defined
+    - created_mfa_conditional_policy is not skipped
+    - created_mfa_conditional_policy.json is defined
+    - created_mfa_conditional_policy.json.pk is defined
+
+- name: Set MFA conditional policy PK from existing policy
+  ansible.builtin.set_fact:
+    mfa_conditional_policy_pk: "{{ existing_mfa_conditional_pk }}"
+  when:
+    - mfa_conditional_policy_pk is not defined
+    - existing_mfa_conditional_pk | length > 0
+
+# Bind MFA conditional policy to MFA validation stage
+- name: Get authentication flow for MFA binding
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/flows/instances/?slug=default-authentication-flow"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: mfa_auth_flow
+  check_mode: false
+
+- name: Set authentication flow PK for MFA
+  ansible.builtin.set_fact:
+    mfa_auth_flow_pk: "{{ mfa_auth_flow.json.results[0].pk }}"
+  when: mfa_auth_flow.json.results | length > 0
+
+# Get flow stage bindings to find the MFA validation stage
+- name: Get flow stage bindings for MFA
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/flows/bindings/?target={{ mfa_auth_flow_pk }}"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: mfa_flow_stage_bindings
+  check_mode: false
+
+# Find the example MFA validation stage binding
+- name: Find MFA validation stage binding
+  ansible.builtin.set_fact:
+    mfa_validation_stage_binding: "{{ mfa_flow_stage_bindings.json.results | selectattr('stage_obj.name', 'defined') | selectattr('stage_obj.name', 'equalto', mfa_config.validation_stage.name) | first | default(None) }}"
+
+- name: Set policy binding target for MFA validation stage
+  ansible.builtin.set_fact:
+    mfa_policy_binding_target: "{{ mfa_validation_stage_binding.policybindingmodel_ptr_id }}"
+  when: mfa_validation_stage_binding is not none and mfa_validation_stage_binding != None
+
+# Get existing policy bindings for this stage
+- name: Get existing policy bindings for MFA validation stage
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/policies/bindings/?target={{ mfa_policy_binding_target }}"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: existing_mfa_policy_bindings
+  check_mode: false
+  when: mfa_policy_binding_target is defined
+
+# Check if MFA conditional policy is already bound
+- name: Check if MFA conditional policy already bound
+  ansible.builtin.set_fact:
+    mfa_conditional_binding_exists: "{{ existing_mfa_policy_bindings.json.results | selectattr('policy', 'defined') | selectattr('policy', 'equalto', mfa_conditional_policy_pk) | list | length > 0 }}"
+  when:
+    - mfa_conditional_policy_pk is defined
+    - mfa_conditional_policy_pk | length > 0
+    - existing_mfa_policy_bindings is defined
+
+- name: Default MFA conditional binding exists to false
+  ansible.builtin.set_fact:
+    mfa_conditional_binding_exists: false
+  when: mfa_conditional_binding_exists is not defined
+
+# Create policy binding for MFA conditional policy
+- name: Create policy binding for MFA conditional
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/policies/bindings/"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      policy: "{{ mfa_conditional_policy_pk }}"
+      target: "{{ mfa_policy_binding_target }}"
+      order: 0
+      enabled: true
+      timeout: 30
+    status_code: [200, 201]
+  when:
+    - not ansible_check_mode
+    - mfa_conditional_policy_pk is defined
+    - mfa_conditional_policy_pk | length > 0
+    - mfa_policy_binding_target is defined
+    - not mfa_conditional_binding_exists
+  register: created_mfa_conditional_binding
+
+- name: Display MFA stages status
+  ansible.builtin.debug:
+    msg: "MFA stages configured: {{ mfa_config.validation_stage.name }} (device_classes={{ mfa_config.validation_stage.device_classes | join(', ') }})"

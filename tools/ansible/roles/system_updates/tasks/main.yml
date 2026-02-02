@@ -1,0 +1,119 @@
+---
+# System Updates Role
+# Monthly OS patching and firmware updates
+# Deploys a standalone script that can run with or without Ansible
+
+- name: Install required packages for system updates
+  ansible.builtin.apt:
+    name:
+      - fwupd
+      - fwupd-signed
+      - dmidecode
+    state: present
+    update_cache: true
+  tags: [system-updates, setup, install]
+
+- name: Ensure fwupd service is enabled
+  ansible.builtin.systemd:
+    name: fwupd
+    enabled: true
+    state: started
+  tags: [system-updates, setup, install]
+
+- name: Create system updates log directory
+  ansible.builtin.file:
+    path: /var/log/system-updates
+    state: directory
+    mode: "0755"
+  tags: [system-updates, setup]
+
+- name: Check if update script exists
+  ansible.builtin.stat:
+    path: /usr/local/bin/monthly-system-update.sh
+  register: update_script_stat
+  tags: [system-updates, setup, script]
+
+- name: Deploy monthly system update script
+  ansible.builtin.template:
+    src: monthly-system-update.sh.j2
+    dest: /usr/local/bin/monthly-system-update.sh
+    mode: "0755"
+    owner: root
+    group: root
+  register: script_deployed
+  tags: [system-updates, setup, script]
+
+- name: Display script deployment status
+  ansible.builtin.debug:
+    msg: "{{ inventory_hostname }}: Script={{ 'Deployed' if script_deployed is changed else 'Exists' }} Path=/usr/local/bin/monthly-system-update.sh"
+  tags: [system-updates, setup, script]
+
+- name: Check if firmware-updates is a directory
+  ansible.builtin.stat:
+    path: /var/log/firmware-updates
+  register: firmware_updates_dir
+  tags: [system-updates, setup]
+
+- name: Migrate old firmware-updates files to system-updates
+  ansible.builtin.shell: |
+    if [ -d /var/log/firmware-updates ] && [ ! -L /var/log/firmware-updates ]; then
+      # Move any existing files to new location
+      if [ "$(ls -A /var/log/firmware-updates 2>/dev/null)" ]; then
+        cp -a /var/log/firmware-updates/* /var/log/system-updates/ 2>/dev/null || true
+      fi
+      # Remove old directory
+      rm -rf /var/log/firmware-updates
+    fi
+  args:
+    executable: /bin/bash
+  when: firmware_updates_dir.stat.exists and firmware_updates_dir.stat.isdir
+  tags: [system-updates, setup]
+
+- name: Create symlink for backward compatibility (firmware_updates)
+  ansible.builtin.file:
+    src: /var/log/system-updates
+    dest: /var/log/firmware-updates
+    state: link
+    force: true
+  tags: [system-updates, setup]
+
+- name: Run system update script
+  ansible.builtin.command: >
+    /usr/local/bin/monthly-system-update.sh
+    {{ '--check-only' if (ansible_check_mode | default(false)) else '' }}
+    --no-reboot
+  register: update_script_result
+  changed_when: "'Successfully applied' in update_script_result.stdout"
+  failed_when: update_script_result.rc != 0 and update_script_result.rc != 100
+  tags: [system-updates, run]
+
+- name: Get latest report file
+  ansible.builtin.shell: |
+    ls -t /var/log/system-updates/*-$(hostname)-report.md 2>/dev/null | head -1
+  register: latest_report_path
+  changed_when: false
+  check_mode: false
+  tags: [system-updates, report]
+
+- name: Read update report
+  ansible.builtin.slurp:
+    src: "{{ latest_report_path.stdout }}"
+  register: update_report_content
+  when: latest_report_path.stdout | length > 0
+  tags: [system-updates, report]
+
+- name: Check if reboot is required
+  ansible.builtin.stat:
+    path: /var/run/reboot-required
+  register: reboot_required_file
+  tags: [system-updates, reboot]
+
+- name: Set reboot needed fact
+  ansible.builtin.set_fact:
+    system_updates_reboot_needed: "{{ reboot_required_file.stat.exists or ('Reboot Required: YES' in (update_report_content['content'] | b64decode)) }}"
+  tags: [system-updates, reboot]
+
+- name: Display update summary
+  ansible.builtin.debug:
+    msg: "{{ inventory_hostname }}: OS={{ 'Updated' if 'OS Packages' in update_script_result.stdout and 'applied' in update_script_result.stdout else 'Current' }} Firmware={{ 'Updated' if 'Firmware' in update_script_result.stdout and 'applied' in update_script_result.stdout else 'Current' }} Reboot={{ 'Required' if system_updates_reboot_needed else 'No' }} Report={{ latest_report_path.stdout }}"
+  tags: [system-updates, report]

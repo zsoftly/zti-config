@@ -1,0 +1,27 @@
+# Security Configuration Tasks
+# Includes: password policy, MFA, reputation, lockout, session, system settings
+---
+
+- name: Configure password policy
+  ansible.builtin.include_tasks: password-policy.yml
+  tags: [password]
+
+- name: Configure MFA stages
+  ansible.builtin.include_tasks: mfa-stages.yml
+  tags: [mfa]
+
+- name: Configure reputation policy
+  ansible.builtin.include_tasks: reputation-policy.yml
+  tags: [reputation]
+
+- name: Configure account lockout policy
+  ansible.builtin.include_tasks: lockout-policy.yml
+  tags: [lockout]
+
+- name: Configure session settings
+  ansible.builtin.include_tasks: session-config.yml
+  tags: [session]
+
+- name: Configure system settings
+  ansible.builtin.include_tasks: system-settings.yml
+  tags: [system]

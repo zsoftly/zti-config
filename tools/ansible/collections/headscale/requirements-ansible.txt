@@ -1,0 +1,9 @@
+# Ansible version pinning for cross-platform consistency
+# Install: pip install -r requirements-ansible.txt
+#
+# ansible 13.0.0 includes ansible-core 2.20.x
+# Requires Python >=3.12
+
+ansible==13.0.0
+boto3>=1.34.0
+botocore>=1.34.0

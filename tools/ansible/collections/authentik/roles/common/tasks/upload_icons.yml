@@ -1,0 +1,201 @@
+# Shared Icon Upload Task
+# Uploads application icons using the new unified file management API (Authentik 2025.12+)
+#
+# Process:
+#   1. Upload icon files to unified file storage (/api/v3/core/files/)
+#   2. Update application with icon URL via PATCH /api/v3/core/applications/{slug}/
+#
+# Required variables:
+#   icon_items: list of items with 'icon' attribute (e.g., oidc_providers, launcher_apps)
+#   icon_slug_attr: attribute name for app slug (e.g., 'app_slug' or 'slug')
+#   icon_apps_list: API response with current apps (must have .json.results)
+#
+# Optional variables:
+#   force_icon_upload: set to true to re-upload all icons (default: false)
+#
+# Returns:
+#   apps_needing_icon_upload: list of items that need icon upload
+---
+- name: Check which icon files exist
+  ansible.builtin.stat:
+    path: "{{ playbook_dir }}/../files/icons/{{ item.icon }}"
+  loop: "{{ icon_items | selectattr('icon', 'defined') | list }}"
+  loop_control:
+    label: "{{ item[icon_slug_attr] }}"
+  register: icon_file_checks
+  when: item.icon | length > 0
+
+- name: Build list of items with existing icon files
+  ansible.builtin.set_fact:
+    items_with_icon_files: >-
+      {{
+        icon_file_checks.results | default([]) |
+        selectattr('stat', 'defined') |
+        selectattr('stat.exists', 'equalto', true) |
+        map(attribute='item') |
+        list
+      }}
+
+- name: Check which apps already have icons set
+  ansible.builtin.set_fact:
+    apps_needing_icon_upload: >-
+      {{
+        items_with_icon_files | selectattr(icon_slug_attr, 'in',
+          icon_apps_list.json.results |
+          rejectattr('meta_icon', 'defined') |
+          map(attribute='slug') |
+          list +
+          icon_apps_list.json.results |
+          selectattr('meta_icon', 'equalto', '') |
+          map(attribute='slug') |
+          list +
+          icon_apps_list.json.results |
+          selectattr('meta_icon', 'none') |
+          map(attribute='slug') |
+          list
+        ) | list
+      }}
+  when: not (force_icon_upload | default(false) | bool)
+
+- name: Use all items when force_icon_upload is true
+  ansible.builtin.set_fact:
+    apps_needing_icon_upload: "{{ items_with_icon_files }}"
+  when: force_icon_upload | default(false) | bool
+
+- name: Warn about missing icon files
+  ansible.builtin.debug:
+    msg: "WARNING: Icon file missing for {{ item.item[icon_slug_attr] }}: {{ item.item.icon }}"
+  loop: "{{ icon_file_checks.results | default([]) | selectattr('stat', 'defined') | selectattr('stat.exists', 'equalto', false) | list }}"
+  loop_control:
+    label: "{{ item.item[icon_slug_attr] }}"
+
+# Step 1: Upload icon files to the unified file storage
+# The new file management API (2025.12+) requires uploading files first
+# Trying /api/v3/core/files/ endpoint (most likely based on API patterns)
+# Using naming convention: application-icons/<filename>
+- name: Upload icon files to unified file storage
+  ansible.builtin.command:
+    cmd: >-
+      curl -sS -w "\n%{http_code}" -X POST
+      "{{ authentik_url }}{{ authentik_api_path }}/core/files/"
+      -H "Authorization: Bearer {{ authentik_token | trim }}"
+      -F "file=@{{ playbook_dir }}/../files/icons/{{ item.icon }}"
+      -F "name=application-icons/{{ item.icon }}"
+  loop: "{{ apps_needing_icon_upload | default([]) }}"
+  loop_control:
+    label: "{{ item[icon_slug_attr] }}"
+  when:
+    - not ansible_check_mode
+  register: file_upload_result
+  changed_when: file_upload_result.stdout_lines[-1] in ['200', '201']
+  failed_when: false
+  # Non-fatal because the endpoint path might vary by version
+
+# Debug: Show upload results for troubleshooting
+- name: Show file upload results
+  ansible.builtin.debug:
+    msg:
+      - "File upload: {{ item.item[icon_slug_attr] }}"
+      - "  Status: HTTP {{ item.stdout_lines[-1] if item.stdout_lines is defined else 'N/A' }}"
+      - "  File: {{ item.item.icon }}"
+      - "  Endpoint: {{ authentik_url }}{{ authentik_api_path }}/core/files/"
+  loop: "{{ file_upload_result.results | default([]) }}"
+  loop_control:
+    label: "{{ item.item[icon_slug_attr] }}"
+  when:
+    - file_upload_result is defined
+
+# Step 2: Parse the file upload response to get the file URL
+- name: Parse uploaded file URLs
+  ansible.builtin.set_fact:
+    uploaded_icon_urls: >-
+      {{
+        uploaded_icon_urls | default({}) |
+        combine({
+          item.item[icon_slug_attr]: (
+            (item.stdout_lines[0] | from_json).url if ((item.stdout_lines[0] | from_json).url is defined)
+            else (item.stdout_lines[0] | from_json).file if ((item.stdout_lines[0] | from_json).file is defined)
+            else (item.stdout_lines[0] | from_json).path if ((item.stdout_lines[0] | from_json).path is defined)
+            else None
+          )
+        })
+      }}
+  loop: "{{ file_upload_result.results | default([]) }}"
+  loop_control:
+    label: "{{ item.item[icon_slug_attr] }}"
+  when:
+    - file_upload_result is defined
+    - item.stdout_lines is defined
+    - item.stdout_lines | length > 1
+    - item.stdout_lines[-1] in ['200', '201']
+  ignore_errors: true
+
+# Step 3: Update applications with icon URLs via PATCH
+- name: Update applications with icon URLs
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/core/applications/{{ item[icon_slug_attr] }}/"
+    method: PATCH
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      icon: "{{ uploaded_icon_urls[item[icon_slug_attr]] }}"
+    status_code: [200]
+  loop: "{{ apps_needing_icon_upload | default([]) }}"
+  loop_control:
+    label: "{{ item[icon_slug_attr] }}"
+  when:
+    - not ansible_check_mode
+    - uploaded_icon_urls is defined
+    - item[icon_slug_attr] in uploaded_icon_urls
+  register: icon_patch_result
+  failed_when: false
+
+# Report on icon upload status
+- name: Report icon upload success
+  ansible.builtin.debug:
+    msg:
+      - "✓ Successfully uploaded icon for {{ item.item[icon_slug_attr] }}"
+      - "  File: {{ item.item.icon }}"
+  loop: "{{ icon_patch_result.results | default([]) }}"
+  loop_control:
+    label: "{{ item.item[icon_slug_attr] if item.item is defined else 'unknown' }}"
+  when:
+    - icon_patch_result is defined
+    - item is defined
+    - item.status is defined
+    - item.status == 200
+
+- name: Warn about failed icon operations
+  ansible.builtin.debug:
+    msg:
+      - "========================================="
+      - "WARNING: Icon upload failed for {{ item[icon_slug_attr] }}"
+      - "========================================="
+      - ""
+      - "Icon file details:"
+      - "  • Local file: {{ playbook_dir }}/../files/icons/{{ item.icon }}"
+      - "  • Filename: {{ item.icon }}"
+      - "  • Use name in Authentik: application-icons/{{ item.icon }}"
+      - ""
+      - "Possible reasons for failure:"
+      - "  • File upload endpoint may be /api/v3/files/ instead of /api/v3/core/files/"
+      - "  • API endpoint paths may vary by Authentik version"
+      - ""
+      - "Manual upload steps:"
+      - "  1. Log into Authentik Admin UI: {{ authentik_url }}"
+      - "  2. Go to: Customization → Files"
+      - "  3. Click 'Create' and upload the local file above"
+      - "  4. Set name to: application-icons/{{ item.icon }}"
+      - "  5. After upload, copy the file URL (should be {{ authentik_url }}/files/application-icons/{{ item.icon }})"
+      - "  6. Go to: Applications → {{ item[icon_slug_attr] }}"
+      - "  7. Edit the application and paste the file URL in the 'icon' field"
+      - ""
+      - "Reference: https://docs.goauthentik.io/releases/2025.12/"
+      - "========================================="
+  loop: "{{ apps_needing_icon_upload | default([]) }}"
+  loop_control:
+    label: "{{ item[icon_slug_attr] }}"
+  when:
+    - uploaded_icon_urls is not defined or item[icon_slug_attr] not in uploaded_icon_urls

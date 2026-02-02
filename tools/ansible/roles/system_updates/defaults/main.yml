@@ -1,0 +1,13 @@
+---
+# System Updates Role - Default Variables
+
+# Script deployment
+system_updates_script_path: /usr/local/bin/monthly-system-update.sh
+system_updates_log_dir: /var/log/system-updates
+
+# Update behavior
+system_updates_auto_apply: true  # Set to false to only check for updates
+system_updates_auto_reboot: false  # Never auto-reboot from Ansible (use dedicated reboot playbook)
+
+# Backward compatibility with firmware_updates role
+firmware_updates_log_dir: /var/log/firmware-updates  # Symlinked to system_updates_log_dir

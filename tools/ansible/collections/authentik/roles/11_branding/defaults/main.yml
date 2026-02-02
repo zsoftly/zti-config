@@ -1,0 +1,46 @@
+# Authentik Branding Configuration
+#
+# Customize this file with your organization's branding
+#
+# Brand Colors (example):
+#   Primary: #0066cc
+#   Light:   #e6f2ff
+#   White:   #ffffff
+---
+branding:
+  title: "Example MSP"
+  # Assets hosted on S3 (brand API only accepts URLs, no upload endpoint)
+  logo_url: "https://example-assets.s3.us-east-1.amazonaws.com/authentik-branding/logo.png"
+  # Keep default Authentik favicon (better UX - users recognize auth portal)
+  favicon_url: "/static/dist/assets/icons/icon.png"
+  # Flow background (uploaded to Authentik media via set_background endpoint)
+  background: "login-background.png"
+
+  # Login page text (identification stage)
+  welcome_title: "Welcome to Example MSP"
+  welcome_subtitle: "Secure access to your services"
+
+  # Custom CSS (example styling)
+  custom_css: |
+    /* Login page - left aligned */
+    .pf-c-login {
+      justify-content: flex-start !important;
+    }
+    .pf-c-login__container {
+      padding-left: 5% !important;
+    }
+    .pf-c-login__main {
+      margin-left: 5% !important;
+      margin-right: auto !important;
+    }
+    /* Brand colors on login buttons (customize with your brand colors) */
+    .pf-c-login .pf-m-primary {
+      --pf-c-button--m-primary--BackgroundColor: #0066cc !important;
+    }
+    .pf-c-login .pf-m-primary:hover {
+      --pf-c-button--m-primary--hover--BackgroundColor: #0052a3 !important;
+    }
+    /* User library - gradient background */
+    .pf-c-page__main {
+      background: linear-gradient(180deg, #1a1a2e 0%, #1a1a2e 50%, #000000 100%) !important;
+    }
