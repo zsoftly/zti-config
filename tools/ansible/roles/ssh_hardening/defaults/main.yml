@@ -1,0 +1,93 @@
+---
+# SSH Hardening Role - Default Variables
+# Override these in your playbook or inventory to customize for your environment
+
+# ============================================================================
+# Banner Configuration
+# ============================================================================
+# Displays legal/warning banners before and after SSH login
+
+# Enable/disable banner display
+login_banner_enabled: true
+
+# Organization information (customize for your company)
+login_banner_company: "YOUR ORGANIZATION"
+login_banner_company_short: "YOUR ORG"
+login_banner_address: ""
+login_banner_classification: "INTERNAL USE ONLY"
+login_banner_security_contact: "security@example.com"
+
+# ============================================================================
+# SSH Daemon Settings
+# ============================================================================
+# SSH server configuration - follows security hardening best practices
+
+# SSH listening port
+ssh_port: 22
+
+# Root login (recommended: no)
+ssh_permit_root_login: "no"
+
+# Authentication methods
+# Note: Allow password auth for initial setup, disable after key-based auth is configured
+ssh_password_authentication: "yes"
+ssh_pubkey_authentication: "yes"
+
+# Brute force protection
+ssh_max_auth_tries: 3
+ssh_login_grace_time: 30
+
+# Session management
+ssh_client_alive_interval: 300
+ssh_client_alive_count_max: 2
+
+# ============================================================================
+# Firewall Configuration (UFW)
+# ============================================================================
+# Network-level access control
+
+# Enable/disable UFW firewall
+firewall_enabled: true
+
+# Default policies
+firewall_default_incoming: "deny"
+firewall_default_outgoing: "allow"
+
+# SSH access rules (customize for your network)
+# Set these variables in your inventory/playbook to configure SSH access:
+# - ssh_allowed_sources: List of IP addresses/subnets to allow SSH from
+# - ssh_allowed_interfaces: List of network interfaces to allow SSH on
+#
+# Example:
+#   ssh_allowed_sources:
+#     - "192.168.1.0/24"
+#     - "10.0.0.0/8"
+#   ssh_allowed_interfaces:
+#     - "eth0"
+#     - "tailscale0"
+
+# ============================================================================
+# Fail2ban Configuration
+# ============================================================================
+# Intrusion prevention - automatically bans IPs with too many failed login attempts
+
+# Enable/disable fail2ban
+fail2ban_enabled: true
+
+# Ban duration in seconds (default: 1 hour)
+fail2ban_bantime: 3600
+
+# Time window for counting failures (default: 10 minutes)
+fail2ban_findtime: 600
+
+# Number of failures before ban
+fail2ban_maxretry: 5
+
+# Whitelist trusted networks from fail2ban bans
+# Note: In production, keep this false for security compliance
+# Set to true in lab/dev environments to prevent accidental lockouts
+fail2ban_whitelist_lan: false
+
+# Trusted subnets to whitelist (only used if fail2ban_whitelist_lan is true)
+# Example: fail2ban_trusted_subnets: ["192.168.1.0/24", "10.0.0.0/8"]
+fail2ban_trusted_subnets: []

@@ -35,7 +35,7 @@ ansible-playbook tools/ansible/playbooks/99-full-stack.yml -i inventory/hosts.ym
 - **wazuh_agent** - Security monitoring agent
 - **system_updates** - OS patching and maintenance
 - **firmware_updates** - Firmware update management
-- **signoz_otel_collector** - OpenTelemetry collector for observability
+- **otel_collector** - OpenTelemetry collector for observability
 
 ### Service Collections
 
@@ -49,7 +49,7 @@ Numbered playbooks show dependency order:
 ```
 01-base-security.yml    - Wazuh security agent
 02-system-updates.yml   - OS and firmware updates
-03-monitoring.yml       - SigNoz collector
+03-monitoring.yml       - OpenTelemetry collector
 04-vpn-mesh.yml        - Headscale VPN
 05-identity.yml        - Authentik IdP
 99-full-stack.yml      - Complete deployment

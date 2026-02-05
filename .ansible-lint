@@ -55,4 +55,4 @@ mock_roles:
   - wazuh_agent
   - system_updates
   - firmware_updates
-  - signoz_otel_collector
+  - otel_collector

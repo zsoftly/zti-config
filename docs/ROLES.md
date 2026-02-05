@@ -80,27 +80,37 @@ wazuh_agent_version: "4.14.1-1"
 
 ---
 
-### signoz_otel_collector
+### otel_collector
 
-**Purpose:** Install and configure SigNoz OpenTelemetry collector
+**Purpose:** Install and configure OpenTelemetry collector (works with any OTLP backend)
 
-**Location:** `tools/ansible/roles/signoz_otel_collector/`
+**Location:** `tools/ansible/roles/otel_collector/`
 
 **Platforms:** Linux (systemd-based)
 
 **Key Variables:**
 
 ```yaml
-signoz_endpoint: "http://signoz-server:4317"
-otel_collector_version: "latest"
+otel_endpoint: "otel-backend.example.com:4317"
+otel_collector_version: "0.142.0"
+otel_insecure: true
 ```
+
+**Supported Backends:**
+
+- SigNoz (open-source)
+- Grafana Cloud
+- Datadog
+- New Relic
+- Honeycomb
+- Any OTLP-compatible endpoint
 
 **Usage:**
 
 ```yaml
 - hosts: monitoring
   roles:
-    - signoz_otel_collector
+    - otel_collector
 ```
 
 ---
@@ -114,7 +124,7 @@ No dependencies:
   ├── wazuh_agent
   ├── system_updates
   ├── firmware_updates
-  └── signoz_otel_collector
+  └── otel_collector
 
 These roles can be deployed independently in any order.
 ```
@@ -146,9 +156,9 @@ These roles can be deployed independently in any order.
   become: true
 
   roles:
-    - role: signoz_otel_collector
+    - role: otel_collector
       vars:
-        signoz_endpoint: "http://custom-server:4317"
+        otel_endpoint: "otel-backend.example.com:4317"
       tags: [monitoring]
 ```
 

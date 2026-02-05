@@ -13,7 +13,7 @@ and this project adheres to
 - Initial repository setup
 - Ansible role structure under `tools/ansible/roles/`
 - Shared roles: wazuh_agent, system_updates, firmware_updates,
-  signoz_otel_collector
+  otel_collector
 - Service collections: headscale, authentik
 - Numbered example playbooks (01-05, 99)
 - Sample inventory files (YAML and INI formats)

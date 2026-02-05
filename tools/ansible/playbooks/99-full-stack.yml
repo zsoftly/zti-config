@@ -7,7 +7,7 @@
 # This playbook runs all configuration steps in the correct order:
 #   1. Security baseline (Wazuh)
 #   2. System maintenance (updates + firmware)
-#   3. Monitoring (SigNoz)
+#   3. Monitoring (OpenTelemetry collector)
 #   4. VPN mesh (Headscale)
 #   5. Identity provider (Authentik)
 
@@ -25,7 +25,7 @@
           Order of operations:
             [1/5] Base Security (Wazuh agent)
             [2/5] System Updates (OS + firmware)
-            [3/5] Monitoring (SigNoz collector)
+            [3/5] Monitoring (OpenTelemetry collector)
             [4/5] VPN Mesh (Headscale)
             [5/5] Identity Provider (Authentik)
       run_once: true
@@ -74,7 +74,7 @@
           Services deployed:
             ✓ Wazuh security agent
             ✓ System updates + firmware
-            ✓ SigNoz OTEL collector
+            ✓ OpenTelemetry collector
             ✓ Headscale VPN mesh
             ✓ Authentik identity provider
 

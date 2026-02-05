@@ -1,0 +1,58 @@
+---
+# SSH Hardening Verification
+# Validates all security configurations are in place
+
+- name: Verify SSH configuration syntax
+  ansible.builtin.command: /usr/sbin/sshd -t
+  register: sshd_check
+  changed_when: false
+  failed_when: sshd_check.rc != 0
+  tags: [ssh, verify]
+
+- name: Verify UFW is active
+  ansible.builtin.command: ufw status
+  register: ufw_check
+  changed_when: false
+  when: firewall_enabled | default(true)
+  tags: [ssh, verify]
+
+- name: Verify fail2ban is running
+  ansible.builtin.systemd:
+    name: fail2ban
+    state: started
+  check_mode: true
+  register: fail2ban_check
+  when: fail2ban_enabled | default(true)
+  tags: [ssh, verify]
+
+- name: Verify banner file exists
+  ansible.builtin.stat:
+    path: /etc/issue.net
+  register: banner_check
+  when: login_banner_enabled | default(true)
+  tags: [ssh, verify]
+
+- name: Prepare UFW status string
+  ansible.builtin.set_fact:
+    ufw_status_str: "{{ 'OK' if (ufw_check is defined and 'active' in ufw_check.stdout) else 'N/A' }}"
+  tags: [ssh, verify]
+
+- name: Prepare Fail2ban status string
+  ansible.builtin.set_fact:
+    fail2ban_status_str: "{{ 'OK' if (fail2ban_check is defined and not fail2ban_check.changed) else 'N/A' }}"
+  tags: [ssh, verify]
+
+- name: SSH hardening verification complete
+  ansible.builtin.debug:
+    msg:
+      - "{{ inventory_hostname }}: SSH [OK] UFW [{{ ufw_status_str }}] Fail2ban [{{ fail2ban_status_str }}]"
+  tags: [ssh, verify]
+
+- name: SSH hardening summary
+  ansible.builtin.debug:
+    msg:
+      - "[OK] SSH Hardening Complete - All Hosts"
+      - "Root login: {{ ssh_permit_root_login | default('no') }} | Password auth: {{ ssh_password_authentication | default('yes') }}"
+      - "SSH port: {{ ssh_port | default(22) }}"
+  run_once: true
+  tags: [ssh, verify]

@@ -1,17 +1,22 @@
 ---
-# SigNoz OpenTelemetry Collector Defaults
+# OpenTelemetry Collector Defaults
+#
+# This role works with any OTLP-compatible backend (SigNoz, Grafana, Datadog, etc.)
 
-# OTEL Collector endpoint (SigNoz)
-# EC2/VMs send telemetry to SigNoz via Traefik NLB
+# OTEL Collector endpoint
+# EC2/VMs send telemetry to OTLP backend via gRPC
 #
 # IMPORTANT: Include port in endpoint!
-# Example: signoz.example.com:4317
+# Examples:
+#   - SigNoz: signoz.example.com:4317
+#   - Grafana Cloud: otlp-gateway-prod-us-east-0.grafana.net:443
+#   - Datadog: http-intake.logs.datadoghq.com:4317
 #
 # Override per environment in vars files:
 #   sbx: Set in vars/headscale.yml or similar
 #   prd: Set in vars/prd.yml
-otel_endpoint: ""  # REQUIRED: host:port format (e.g., signoz.example.com:4317)
-otel_insecure: true  # Internal NLB does not terminate TLS for gRPC
+otel_endpoint: ""  # REQUIRED: host:port format (e.g., otel-backend.example.com:4317)
+otel_insecure: true  # Set to false if backend requires TLS (e.g., Grafana Cloud, Datadog)
 
 # Service identification
 otel_service_name: "{{ inventory_hostname }}"
@@ -68,6 +73,11 @@ otel_keepalive_timeout: "20s"
 # Log filter regex pattern
 # Word boundaries (\b) prevent false matches like "stderr", "terrain"
 # Matches: error, warn, warning, fatal, panic, critical, fail, failed, failure, denied, refused
+#
+# IMPORTANT: Double backslashes (\\b) required for YAML escaping
+# - YAML string: \\b becomes literal \b in the config file
+# - Regex engine: \b is interpreted as word boundary
+# Do not change to single backslash or regex will break
 otel_log_filter_pattern: '(?i)(\\berror\\b|\\bwarn(ing)?\\b|\\bfatal\\b|\\bpanic\\b|\\bcritical\\b|\\bfail(ed|ure)?\\b|\\bdenied\\b|\\brefused\\b)'
 
 # =============================================================================

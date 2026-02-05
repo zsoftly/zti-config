@@ -1,0 +1,131 @@
+---
+# SSH Daemon Configuration - Hardened settings
+# Defense layer: Application-level security
+
+- name: Backup original sshd_config
+  ansible.builtin.copy:
+    src: /etc/ssh/sshd_config
+    dest: /etc/ssh/sshd_config.orig
+    remote_src: true
+    force: false
+    mode: "0600"
+  tags: [ssh, sshd]
+
+- name: Configure SSH daemon security settings
+  ansible.builtin.lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: "{{ item.regexp }}"
+    line: "{{ item.line }}"
+    state: present
+    backup: true
+    validate: "/usr/sbin/sshd -t -f %s"
+  loop:
+    # Port configuration
+    - regexp: '^#?Port '
+      line: "Port {{ ssh_port | default(22) }}"
+
+    # Authentication settings
+    - regexp: '^#?PermitRootLogin'
+      line: "PermitRootLogin {{ ssh_permit_root_login | default('no') }}"
+    - regexp: '^#?PasswordAuthentication'
+      line: "PasswordAuthentication {{ ssh_password_authentication | default('no') }}"
+    - regexp: '^#?PubkeyAuthentication'
+      line: "PubkeyAuthentication {{ ssh_pubkey_authentication | default('yes') }}"
+    - regexp: '^#?ChallengeResponseAuthentication'
+      line: "ChallengeResponseAuthentication no"
+    - regexp: '^#?UsePAM'
+      line: "UsePAM yes"
+    - regexp: '^#?PermitEmptyPasswords'
+      line: "PermitEmptyPasswords no"
+
+    # Brute force protection
+    - regexp: '^#?MaxAuthTries'
+      line: "MaxAuthTries {{ ssh_max_auth_tries | default(3) }}"
+    - regexp: '^#?LoginGraceTime'
+      line: "LoginGraceTime {{ ssh_login_grace_time | default(30) }}"
+    - regexp: '^#?MaxSessions'
+      line: "MaxSessions 10"
+    - regexp: '^#?MaxStartups'
+      line: "MaxStartups 10:30:60"
+
+    # Session management
+    - regexp: '^#?ClientAliveInterval'
+      line: "ClientAliveInterval {{ ssh_client_alive_interval | default(300) }}"
+    - regexp: '^#?ClientAliveCountMax'
+      line: "ClientAliveCountMax {{ ssh_client_alive_count_max | default(2) }}"
+
+    # Disable insecure features
+    - regexp: '^#?X11Forwarding'
+      line: "X11Forwarding no"
+    - regexp: '^#?AllowTcpForwarding'
+      line: "AllowTcpForwarding no"
+    - regexp: '^#?AllowAgentForwarding'
+      line: "AllowAgentForwarding no"
+    - regexp: '^#?PermitTunnel'
+      line: "PermitTunnel no"
+    - regexp: '^#?GatewayPorts'
+      line: "GatewayPorts no"
+
+    # Logging
+    - regexp: '^#?LogLevel'
+      line: "LogLevel VERBOSE"
+    - regexp: '^#?SyslogFacility'
+      line: "SyslogFacility AUTH"
+
+    # Protocol and ciphers (modern only)
+    - regexp: '^#?Protocol'
+      line: "Protocol 2"
+
+    # Strict mode
+    - regexp: '^#?StrictModes'
+      line: "StrictModes yes"
+
+    # DNS (disable for faster connections)
+    - regexp: '^#?UseDNS'
+      line: "UseDNS no"
+
+  notify: restart sshd
+  tags: [ssh, sshd]
+
+- name: Configure strong ciphers and MACs
+  ansible.builtin.blockinfile:
+    path: /etc/ssh/sshd_config
+    marker: "# {mark} ANSIBLE MANAGED - Strong Ciphers"
+    block: |
+      # Modern, secure ciphers only
+      Ciphers chacha20-poly1305@openssh.com,aes256-gcm@openssh.com,aes128-gcm@openssh.com,aes256-ctr,aes192-ctr,aes128-ctr
+
+      # Secure key exchange algorithms
+      KexAlgorithms curve25519-sha256,curve25519-sha256@libssh.org,diffie-hellman-group16-sha512,diffie-hellman-group18-sha512
+
+      # Strong MACs only
+      MACs hmac-sha2-512-etm@openssh.com,hmac-sha2-256-etm@openssh.com,hmac-sha2-512,hmac-sha2-256
+
+      # Host key algorithms
+      HostKeyAlgorithms ssh-ed25519,ssh-ed25519-cert-v01@openssh.com,rsa-sha2-512,rsa-sha2-256
+    state: present
+    validate: "/usr/sbin/sshd -t -f %s"
+  notify: restart sshd
+  tags: [ssh, sshd]
+
+- name: Set correct permissions on SSH directory
+  ansible.builtin.file:
+    path: /etc/ssh
+    state: directory
+    mode: "0755"
+    owner: root
+    group: root
+  tags: [ssh, sshd]
+
+- name: Set correct permissions on sshd_config
+  ansible.builtin.file:
+    path: /etc/ssh/sshd_config
+    mode: "0600"
+    owner: root
+    group: root
+  tags: [ssh, sshd]
+
+- name: Validate SSH configuration
+  ansible.builtin.command: /usr/sbin/sshd -t
+  changed_when: false
+  tags: [ssh, sshd, validate]

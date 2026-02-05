@@ -31,10 +31,10 @@
     - management
 
   post_tasks:
-    - name: Install SigNoz OTEL Collector
+    - name: Install OpenTelemetry Collector
       when: otel_enabled | default(false)
       ansible.builtin.include_role:
-        name: signoz_otel_collector
+        name: otel_collector
         apply:
           tags: [otel]
       tags: [otel, always]

@@ -4,10 +4,11 @@ Shared Ansible roles for infrastructure configuration.
 
 ## Available Roles
 
+- **ssh_hardening** - SSH security hardening with firewall and fail2ban
 - **wazuh_agent** - Security monitoring agent
 - **system_updates** - OS patching and maintenance
 - **firmware_updates** - Firmware update management
-- **signoz_otel_collector** - OpenTelemetry collector
+- **otel_collector** - OpenTelemetry collector
 
 ## Documentation
 

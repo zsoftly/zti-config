@@ -1,13 +1,17 @@
 ---
-# SigNoz OpenTelemetry Collector Installation
+# OpenTelemetry Collector Installation
+# Works with any OTLP-compatible backend (SigNoz, Grafana, Datadog, etc.)
 
 # Validate required configuration
 - name: Validate otel_endpoint is configured
   ansible.builtin.fail:
     msg: |
       otel_endpoint is required but not set.
-      Set it to your SigNoz internal NLB DNS name in group_vars or host_vars.
-      Example: internal-abc123.elb.ca-central-1.amazonaws.com
+      Set it to your OTLP backend endpoint in group_vars or host_vars.
+      Examples:
+        - SigNoz: internal-abc123.elb.ca-central-1.amazonaws.com:4317
+        - Grafana Cloud: otlp-gateway-prod-us-east-0.grafana.net:443
+        - Datadog: http-intake.logs.datadoghq.com:4317
   when: otel_endpoint | default('') | length == 0
 
 # Validate and determine architecture
@@ -130,7 +134,7 @@
     - Restart otel-collector
 
 - name: Add otel-collector to docker group
-  when: otel_docker_metrics or otel_docker_logs | default(false)
+  when: (otel_docker_metrics or otel_docker_logs) | default(false)
   ansible.builtin.user:
     name: otel-collector
     groups: docker

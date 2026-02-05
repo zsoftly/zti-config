@@ -54,7 +54,7 @@ ansible-playbook tools/ansible/playbooks/02-system-updates.yml \
 
 ### 03-monitoring.yml
 
-**Purpose:** Deploy SigNoz OTEL collector
+**Purpose:** Deploy OpenTelemetry collector
 
 **Dependencies:** None
 

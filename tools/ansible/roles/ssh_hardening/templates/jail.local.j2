@@ -1,0 +1,53 @@
+# Fail2ban Configuration for SSH Protection
+# Managed by Ansible - do not edit manually
+#
+# Protects against brute force attacks by temporarily
+# banning IPs with too many failed login attempts
+
+[DEFAULT]
+# Ban duration (in seconds)
+bantime = {{ fail2ban_bantime | default(3600) }}
+
+# Time window for counting failures
+findtime = {{ fail2ban_findtime | default(600) }}
+
+# Number of failures before ban
+maxretry = {{ fail2ban_maxretry | default(5) }}
+
+# Backend for log monitoring
+backend = systemd
+
+# Ignore localhost and optionally trusted subnets
+# LAN subnet whitelisting: {% if fail2ban_whitelist_lan %}ENABLED (lab/dev mode){% else %}DISABLED (production mode){% endif %}
+# Production: Keep fail2ban_whitelist_lan=false for security compliance
+# Lab/Dev: Set fail2ban_whitelist_lan=true to prevent accidental lockouts
+{% set ignore_ips = ['127.0.0.1/8', '::1'] %}
+{% if fail2ban_whitelist_lan | default(false) and fail2ban_trusted_subnets | default([]) | length > 0 %}
+{%   set ignore_ips = ignore_ips + fail2ban_trusted_subnets %}
+{% endif %}
+ignoreip = {{ ignore_ips | join(' ') }}
+
+# Ban action (using UFW since we're using UFW firewall)
+banaction = ufw
+banaction_allports = ufw
+
+[sshd]
+enabled = true
+port = {{ ssh_port | default(22) }}
+filter = sshd
+logpath = /var/log/auth.log
+maxretry = {{ fail2ban_maxretry | default(5) }}
+bantime = {{ fail2ban_bantime | default(3600) }}
+findtime = {{ fail2ban_findtime | default(600) }}
+
+# Aggressive mode - also catch pre-auth failures
+mode = aggressive
+
+[sshd-ddos]
+enabled = true
+port = {{ ssh_port | default(22) }}
+filter = sshd-ddos
+logpath = /var/log/auth.log
+maxretry = 10
+bantime = 86400
+findtime = 300

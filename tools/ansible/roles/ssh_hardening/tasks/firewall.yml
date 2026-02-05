@@ -1,0 +1,104 @@
+---
+# Firewall Configuration - UFW with SSH access control
+# Defense layer: Network-level access control
+# Note: All tasks are idempotent - safe to run multiple times
+
+- name: Install UFW
+  ansible.builtin.apt:
+    name: ufw
+    state: present
+  when: ansible_facts['os_family'] == 'Debian'
+  tags: [ssh, firewall]
+
+- name: Set default incoming policy to deny
+  community.general.ufw:
+    direction: incoming
+    default: "{{ firewall_default_incoming | default('deny') }}"
+  tags: [ssh, firewall]
+
+- name: Set default outgoing policy to allow
+  community.general.ufw:
+    direction: outgoing
+    default: "{{ firewall_default_outgoing | default('allow') }}"
+  tags: [ssh, firewall]
+
+# SSH access rules - configure via inventory variables
+# Example inventory vars:
+#   ssh_allowed_sources:
+#     - "192.168.1.0/24"
+#     - "10.0.0.0/8"
+#   ssh_allowed_interfaces:
+#     - "eth0"
+#     - "tailscale0"
+
+- name: Allow SSH from specific source IPs/subnets
+  community.general.ufw:
+    rule: allow
+    port: "{{ ssh_port | default(22) }}"
+    proto: tcp
+    from_ip: "{{ item }}"
+    comment: "SSH from {{ item }}"
+  loop: "{{ ssh_allowed_sources | default([]) }}"
+  when: ssh_allowed_sources is defined and ssh_allowed_sources | length > 0
+  tags: [ssh, firewall]
+
+- name: Allow SSH on specific network interfaces
+  community.general.ufw:
+    rule: allow
+    port: "{{ ssh_port | default(22) }}"
+    proto: tcp
+    interface: "{{ item }}"
+    direction: in
+    comment: "SSH on {{ item }}"
+  loop: "{{ ssh_allowed_interfaces | default([]) }}"
+  when: ssh_allowed_interfaces is defined and ssh_allowed_interfaces | length > 0
+  tags: [ssh, firewall]
+
+- name: Allow SSH from anywhere (if no restrictions configured)
+  community.general.ufw:
+    rule: allow
+    port: "{{ ssh_port | default(22) }}"
+    proto: tcp
+    comment: "SSH from anywhere"
+  when: >
+    (ssh_allowed_sources is not defined or ssh_allowed_sources | length == 0) and
+    (ssh_allowed_interfaces is not defined or ssh_allowed_interfaces | length == 0)
+  tags: [ssh, firewall]
+
+- name: Allow loopback traffic
+  community.general.ufw:
+    rule: allow
+    interface: lo
+    direction: in
+    comment: "Loopback traffic"
+  tags: [ssh, firewall]
+
+- name: Allow established connections
+  ansible.builtin.lineinfile:
+    path: /etc/ufw/before.rules
+    insertbefore: '^# drop INVALID packets'
+    line: '-A ufw-before-input -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT'
+    regexp: '^-A ufw-before-input -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT$'
+    state: present
+  tags: [ssh, firewall]
+
+- name: Enable UFW
+  community.general.ufw:
+    state: enabled
+  tags: [ssh, firewall]
+
+- name: Enable UFW logging
+  community.general.ufw:
+    logging: "on"
+  tags: [ssh, firewall]
+
+- name: Display firewall status
+  ansible.builtin.command: ufw status verbose
+  register: ufw_status
+  changed_when: false
+  tags: [ssh, firewall]
+
+- name: Firewall configured
+  ansible.builtin.debug:
+    msg: "{{ inventory_hostname }}: [OK] UFW firewall configured with default deny policy"
+  tags: [ssh, firewall]

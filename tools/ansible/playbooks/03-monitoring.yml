@@ -1,15 +1,15 @@
 ---
 # 03-monitoring.yml
-# Monitoring: Install SigNoz OpenTelemetry collector
+# Monitoring: Install OpenTelemetry collector
 # Dependencies: None
 # Run: ansible-playbook tools/ansible/playbooks/03-monitoring.yml -i inventory/hosts.yml
 
-- name: Install SigNoz OpenTelemetry Collector
+- name: Install OpenTelemetry Collector
   hosts: monitoring
   become: true
 
   roles:
-    - role: signoz_otel_collector
+    - role: otel_collector
       tags: [monitoring, observability]
 
   post_tasks:

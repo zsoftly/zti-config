@@ -1,20 +1,31 @@
-# SigNoz OpenTelemetry Collector Role
+# OpenTelemetry Collector Role
 
 Shared Ansible role for installing the OpenTelemetry Collector on EC2 instances.
-Sends metrics and logs to SigNoz via gRPC.
+Sends metrics and logs to any OTLP-compatible backend via gRPC.
+
+## Supported Backends
+
+This role works with any OpenTelemetry-compatible observability platform:
+
+- **SigNoz** - Open-source APM and observability
+- **Grafana Cloud** - Managed Prometheus, Loki, Tempo
+- **Datadog** - Commercial APM and monitoring
+- **New Relic** - Application performance monitoring
+- **Honeycomb** - Observability for distributed systems
+- **Any OTLP endpoint** - Standard OpenTelemetry Protocol
 
 ## Requirements
 
 - Linux (Ubuntu/Debian/RHEL/Fedora)
 - ARM64 or AMD64 architecture
-- Network access to SigNoz OTEL endpoint (port 4317)
+- Network access to OTLP endpoint (typically port 4317 for gRPC)
 
 ## Role Variables
 
 ### Required
 
 ```yaml
-otel_endpoint: "signoz.example.com:4317" # SigNoz gRPC endpoint (host:port)
+otel_endpoint: "otel-backend.example.com:4317" # OTLP gRPC endpoint (host:port)
 ```
 
 ### Optional
@@ -23,7 +34,7 @@ otel_endpoint: "signoz.example.com:4317" # SigNoz gRPC endpoint (host:port)
 # TLS settings
 otel_insecure: true # Set false if using TLS
 
-# Service identification (for SigNoz UI)
+# Service identification (displayed in observability backend UI)
 otel_service_name: "{{ inventory_hostname }}"
 otel_service_environment: "sbx"
 
@@ -62,22 +73,22 @@ otel_log_paths:
   become: true
 
   vars:
-    otel_endpoint: "signoz.example.com:4317"
+    otel_endpoint: "otel-backend.example.com:4317"
     otel_service_name: "my-service"
     otel_service_environment: "sbx"
 
   roles:
-    - role: signoz_otel_collector
+    - role: otel_collector
 ```
 
 ### Include with Tags
 
 ```yaml
 post_tasks:
-  - name: Install SigNoz OTEL Collector
+  - name: Install OpenTelemetry Collector
     when: otel_enabled | default(false)
     ansible.builtin.include_role:
-      name: signoz_otel_collector
+      name: otel_collector
       apply:
         tags: [otel, monitoring]
     tags: [otel, monitoring, always]

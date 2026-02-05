@@ -1,0 +1,46 @@
+---
+# Fail2ban Configuration - Brute force protection
+# Defense layer: Rate limiting and auto-banning
+
+- name: Ensure fail2ban is installed
+  ansible.builtin.apt:
+    name: fail2ban
+    state: present
+  when: ansible_facts['os_family'] == 'Debian'
+  tags: [ssh, fail2ban]
+
+- name: Create fail2ban local configuration
+  ansible.builtin.template:
+    src: jail.local.j2
+    dest: /etc/fail2ban/jail.local
+    mode: "0644"
+    owner: root
+    group: root
+  notify: restart fail2ban
+  tags: [ssh, fail2ban]
+
+- name: Enable and start fail2ban
+  ansible.builtin.systemd:
+    name: fail2ban
+    enabled: true
+    state: started
+  tags: [ssh, fail2ban]
+
+- name: Wait for fail2ban to start
+  ansible.builtin.wait_for:
+    path: /var/run/fail2ban/fail2ban.sock
+    state: present
+    timeout: 30
+  tags: [ssh, fail2ban]
+
+- name: Display fail2ban status
+  ansible.builtin.command: fail2ban-client status sshd
+  register: fail2ban_status
+  changed_when: false
+  failed_when: false
+  tags: [ssh, fail2ban]
+
+- name: Fail2ban configured
+  ansible.builtin.debug:
+    msg: "{{ inventory_hostname }}: [OK] Fail2ban - Ban: {{ fail2ban_bantime | default(3600) }}s, Max retries: {{ fail2ban_maxretry | default(5) }}"
+  tags: [ssh, fail2ban]

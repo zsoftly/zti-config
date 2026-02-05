@@ -22,7 +22,7 @@ ReadWritePaths=/var/lib/otel-collector
 ReadOnlyPaths=/var/log
 
 # Docker access
-{% if otel_docker_metrics or otel_docker_logs | default(false) %}
+{% if (otel_docker_metrics or otel_docker_logs) | default(false) %}
 SupplementaryGroups=docker
 {% endif %}
 {% if otel_docker_logs | default(false) %}

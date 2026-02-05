@@ -1,0 +1,26 @@
+---
+# SSH Hardening Role - Main Task File
+# Implements defense-in-depth security: firewall + SSH config + fail2ban
+
+- name: Configure legal banner
+  ansible.builtin.include_tasks: banner.yml
+  when: login_banner_enabled | default(true)
+  tags: [ssh, banner]
+
+- name: Configure firewall (UFW)
+  ansible.builtin.include_tasks: firewall.yml
+  when: firewall_enabled | default(true)
+  tags: [ssh, firewall]
+
+- name: Configure SSH daemon
+  ansible.builtin.include_tasks: sshd.yml
+  tags: [ssh, sshd]
+
+- name: Configure Fail2ban
+  ansible.builtin.include_tasks: fail2ban.yml
+  when: fail2ban_enabled | default(true)
+  tags: [ssh, fail2ban]
+
+- name: Verify SSH hardening
+  ansible.builtin.include_tasks: verify.yml
+  tags: [ssh, verify]

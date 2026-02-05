@@ -63,6 +63,8 @@ receivers:
     operators:
       # Filter: drop logs that DON'T match error/warn patterns (keep only WARN, ERROR, FATAL)
       # Note: filter operator drops logs where expr=true, so we use 'not' to invert
+      # SECURITY: otel_log_filter_pattern must be validated/controlled in defaults/main.yml
+      #           Do not allow user input directly into this variable (regex injection risk)
       - type: filter
         expr: 'not (body matches "{{ otel_log_filter_pattern }}")'
 {% endif %}
@@ -86,6 +88,8 @@ receivers:
         to: body
       # Filter: drop logs that DON'T match patterns (keep only WARN, ERROR, FATAL + headscale events)
       # Note: filter operator drops logs where expr=true, so we use 'not' to invert
+      # SECURITY: otel_log_filter_pattern must be validated/controlled in defaults/main.yml
+      #           Do not allow user input directly into this variable (regex injection risk)
       - type: filter
 {% if otel_headscale_log_parsing %}
         expr: 'not (body matches "{{ otel_log_filter_pattern }}" or body contains "Node connected" or body contains "Node disconnected")'
