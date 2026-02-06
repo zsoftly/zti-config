@@ -1,0 +1,26 @@
+---
+galaxy_info:
+  author: ZSoftly Technologies
+  description: OpenTelemetry Collector deployment for observability
+  company: ZSoftly Technologies Inc.
+  license: MIT
+  min_ansible_version: "2.9"
+
+  platforms:
+    - name: Debian
+      versions:
+        - bullseye
+        - bookworm
+    - name: Ubuntu
+      versions:
+        - focal
+        - jammy
+        - noble
+
+  galaxy_tags:
+    - monitoring
+    - observability
+    - telemetry
+    - logs
+
+dependencies: []

@@ -1,0 +1,25 @@
+---
+galaxy_info:
+  author: ZSoftly Technologies
+  description: OS patching and package management
+  company: ZSoftly Technologies Inc.
+  license: MIT
+  min_ansible_version: "2.9"
+
+  platforms:
+    - name: Debian
+      versions:
+        - bullseye
+        - bookworm
+    - name: Ubuntu
+      versions:
+        - focal
+        - jammy
+        - noble
+
+  galaxy_tags:
+    - maintenance
+    - patching
+    - updates
+
+dependencies: []
