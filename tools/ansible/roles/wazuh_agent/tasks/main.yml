@@ -128,7 +128,7 @@
   changed_when: wazuh_enrollment.rc == 0
   failed_when: wazuh_enrollment.rc != 0
   timeout: 30
-  no_log: true
+  no_log: false  # Temporarily disabled to debug enrollment issues
 
 - name: Save enrolled group config
   when: wazuh_needs_enrollment

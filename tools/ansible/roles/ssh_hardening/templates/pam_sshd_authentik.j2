@@ -1,0 +1,20 @@
+# PAM configuration for SSH with Authentik Agent
+# Managed by Ansible - do not edit manually
+
+# Include common authentication
+@include common-auth
+
+# Authentik agent PAM module
+auth sufficient pam_authentik.so
+
+# Standard account management
+@include common-account
+
+# Password management (not used for SSH key auth)
+@include common-password
+
+# Session configuration
+@include common-session
+
+# Automatically create home directories
+session required pam_mkhomedir.so skel=/etc/skel umask=0077
