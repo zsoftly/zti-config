@@ -22,7 +22,7 @@
     - name: Add GPG key
       ansible.builtin.shell: |
         curl -fsSL https://packages.wazuh.com/key/GPG-KEY-WAZUH | \
-        gpg --dearmor -o /usr/share/keyrings/wazuh-archive-keyring.gpg
+        gpg --dearmor --batch --yes -o /usr/share/keyrings/wazuh-archive-keyring.gpg
       when: not wazuh_gpg_key.stat.exists or wazuh_gpg_key.stat.size == 0
 
     - name: Add repository
