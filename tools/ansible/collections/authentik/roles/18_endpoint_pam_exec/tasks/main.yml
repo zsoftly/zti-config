@@ -1,0 +1,122 @@
+---
+# 18_endpoint_pam_exec - Main Task File
+# Configures pam_exec with a custom Python script to validate passwords
+# against authentik's flow executor API. No enterprise license required.
+
+#===============================================================================
+# DEPLOY - PAM Auth Script
+#===============================================================================
+
+- name: Ensure python3 is installed for PAM exec script
+  ansible.builtin.apt:
+    name: python3
+    state: present
+  when: ansible_os_family == 'Debian'
+  tags: [authentik, pam-exec]
+
+- name: Deploy Authentik PAM exec authentication script
+  ansible.builtin.template:
+    src: authentik-pam-auth.py.j2
+    dest: /opt/authentik-pam-auth.py
+    mode: "0700"
+    owner: root
+    group: root
+  tags: [authentik, pam-exec]
+
+#===============================================================================
+# CONFIGURE - PAM Stack (common-auth)
+#===============================================================================
+
+- name: Backup existing common-auth before modification
+  ansible.builtin.copy:
+    src: /etc/pam.d/common-auth
+    dest: /etc/pam.d/common-auth.bak
+    remote_src: true
+    mode: "0644"
+  tags: [authentik, pam-exec]
+
+- name: Deploy common-auth with pam_exec configuration
+  ansible.builtin.template:
+    src: common-auth-pam-exec.j2
+    dest: /etc/pam.d/common-auth
+    mode: "0644"
+    backup: true
+  tags: [authentik, pam-exec]
+
+#===============================================================================
+# CONFIGURE - SSHD for Password Authentication
+#===============================================================================
+
+- name: Enable PasswordAuthentication in sshd_config
+  ansible.builtin.lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: "^#?PasswordAuthentication"
+    line: "PasswordAuthentication yes"
+    state: present
+    backup: true
+  notify: restart sshd
+  tags: [authentik, pam-exec]
+
+- name: Enable KbdInteractiveAuthentication in sshd_config
+  ansible.builtin.lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: "^#?KbdInteractiveAuthentication"
+    line: "KbdInteractiveAuthentication yes"
+    state: present
+  notify: restart sshd
+  tags: [authentik, pam-exec]
+
+- name: Ensure UsePAM is enabled in sshd_config
+  ansible.builtin.lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: "^#?UsePAM"
+    line: "UsePAM yes"
+    state: present
+  notify: restart sshd
+  tags: [authentik, pam-exec]
+
+#===============================================================================
+# CONFIGURE - Auto-create Home Directories
+#===============================================================================
+
+- name: Enable pam_mkhomedir in common-session
+  ansible.builtin.lineinfile:
+    path: /etc/pam.d/common-session
+    regexp: "pam_mkhomedir.so"
+    line: "session optional        pam_mkhomedir.so skel=/etc/skel umask=077"
+    state: present
+  tags: [authentik, pam-exec]
+
+#===============================================================================
+# VERIFY - Check Configuration
+#===============================================================================
+
+- name: Verify PAM exec script exists and is executable
+  ansible.builtin.stat:
+    path: /opt/authentik-pam-auth.py
+  register: pam_exec_script
+  check_mode: false
+  failed_when:
+    - not ansible_check_mode
+    - not pam_exec_script.stat.exists or not pam_exec_script.stat.executable
+  tags: [authentik, pam-exec]
+
+- name: Validate sshd configuration
+  ansible.builtin.command: sshd -t
+  register: sshd_validate
+  changed_when: false
+  failed_when:
+    - not ansible_check_mode
+    - sshd_validate.rc != 0
+  tags: [authentik, pam-exec]
+
+- name: Display PAM exec configuration status
+  ansible.builtin.debug:
+    msg:
+      - "Authentik PAM exec authentication configured"
+      - "Script: /opt/authentik-pam-auth.py"
+      - "Authentik URL: {{ authentik_url }}"
+      - "Flow slug: {{ authentik_flow_slug }}"
+      - "UID threshold: {{ authentik_pam_exec_uid_threshold }}"
+      - "Skip SSL verify: {{ authentik_pam_exec_skip_ssl_verify }}"
+  tags: [authentik, pam-exec]

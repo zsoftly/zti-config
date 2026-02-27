@@ -64,3 +64,5 @@ all:
 
     # Authentik configuration
     authentik_url: https://auth.example.com
+    authentik_domain_name: auth.example.com
+    # vault_authentik_agent_enrollment_token: <set in vault>

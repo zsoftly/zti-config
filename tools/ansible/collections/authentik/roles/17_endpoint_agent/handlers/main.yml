@@ -1,0 +1,8 @@
+---
+# 17_endpoint_agent - Service Handlers
+
+- name: restart sshd
+  ansible.builtin.systemd:
+    name: ssh
+    state: restarted
+  listen: restart sshd

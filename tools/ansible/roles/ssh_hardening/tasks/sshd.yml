@@ -32,7 +32,7 @@
     - regexp: '^#?PubkeyAuthentication'
       line: "PubkeyAuthentication {{ ssh_pubkey_authentication | default('yes') }}"
     - regexp: '^#?ChallengeResponseAuthentication'
-      line: "ChallengeResponseAuthentication no"
+      line: "ChallengeResponseAuthentication yes"
     - regexp: '^#?UsePAM'
       line: "UsePAM yes"
     - regexp: '^#?PermitEmptyPasswords'

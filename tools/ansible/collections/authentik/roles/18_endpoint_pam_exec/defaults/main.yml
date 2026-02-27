@@ -1,0 +1,16 @@
+---
+# 18_endpoint_pam_exec - Default Variables
+# Uses pam_exec with a custom script to validate passwords against authentik API.
+# No enterprise license required.
+#
+# Required variables (set in playbook/inventory):
+#   authentik_url: "https://auth.example.com"
+
+# Authentik flow slug for SSH password authentication
+authentik_flow_slug: "ssh-password-authentication"
+
+# Skip SSL verification (only for testing with self-signed certs)
+authentik_pam_exec_skip_ssl_verify: false
+
+# Minimum UID to authenticate via authentik (lower UIDs use local auth)
+authentik_pam_exec_uid_threshold: 2000

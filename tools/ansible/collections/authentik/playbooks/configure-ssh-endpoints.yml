@@ -1,0 +1,23 @@
+---
+# Configure SSH Endpoints with Authentik Agent and PAM Authentication
+#
+# Targets endpoint hosts (unlike configure.yml which targets localhost for API calls).
+#
+# Run: ansible-playbook collections/authentik/playbooks/configure-ssh-endpoints.yml -i inventory/hosts.yml
+#
+# Tags:
+#   authentik    - All Authentik endpoint tasks
+#   agent        - Authentik agent only
+#   pam-exec     - PAM exec authentication only
+#   ssh-keys     - SSH key provisioning only
+
+- name: Configure SSH Endpoints with Authentik
+  hosts: endpoints
+  become: true
+
+  roles:
+    - role: 17_endpoint_agent
+      tags: [authentik, agent]
+
+    - role: 18_endpoint_pam_exec
+      tags: [authentik, pam-exec]

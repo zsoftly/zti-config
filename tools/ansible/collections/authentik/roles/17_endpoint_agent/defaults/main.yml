@@ -1,0 +1,17 @@
+---
+# 17_endpoint_agent - Default Variables
+#
+# Required variables (set in playbook/inventory):
+#   authentik_url: "https://auth.example.com"
+#   authentik_domain_name: "auth.example.com"
+#   vault_authentik_agent_enrollment_token: "<token>"
+#   ansible_user: "<fallback-user>"
+#
+# Optional - SSH key provisioning:
+#   authentik_ssh_users:
+#     - username: jdoe
+#       state: present
+#       ssh_keys:
+#         - "ssh-ed25519 AAAA... jdoe@laptop"
+#     - username: offboarded_user
+#       state: absent
