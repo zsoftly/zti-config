@@ -98,8 +98,8 @@ def main():
             log(f"User {username} (uid={user_info.pw_uid}) below threshold, skipping")
             sys.exit(1)
     except KeyError:
-        # User not found in local passwd - this is expected for authentik-only users
-        sys.exit(1)
+        # User not in local passwd/NSS yet — proceed with authentik auth
+        pass
 
     # Read password from stdin (provided by pam_exec with expose_authtok)
     password = sys.stdin.readline().rstrip("\n")

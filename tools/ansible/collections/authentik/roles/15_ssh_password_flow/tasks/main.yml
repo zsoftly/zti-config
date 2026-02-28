@@ -20,7 +20,7 @@
 - name: Set flow existence fact
   ansible.builtin.set_fact:
     ssh_flow_exists: "{{ existing_flow.json.results | length > 0 }}"
-    ssh_flow_pk: "{{ existing_flow.json.results[0].pk | default('') }}"
+    ssh_flow_pk: "{{ (existing_flow.json.results | first | default({})).pk | default('') }}"
 
 - name: Show flow status (check mode)
   ansible.builtin.debug:
@@ -71,40 +71,11 @@
   register: all_stages
   check_mode: false
 
-- name: Resolve stage PKs
-  ansible.builtin.set_fact:
-    resolved_stages: >-
-      {{
-        ssh_password_flow.stages | map('combine',
-          {'pk': all_stages.json.results
-            | selectattr('name', 'equalto', item.name)
-            | map(attribute='pk')
-            | first
-            | default('')
-          }
-        ) | list
-      }}
-  loop: "{{ ssh_password_flow.stages }}"
-  loop_control:
-    label: "{{ item.name }}"
-  register: stage_resolution_results
-
-# Build the resolved list properly
-- name: Build resolved stages list
-  ansible.builtin.set_fact:
-    resolved_stages: "{{ ssh_password_flow.stages | map('combine', {}) | list }}"
-
 - name: Resolve each stage PK
   ansible.builtin.set_fact:
-    resolved_stages: >-
-      {{
-        resolved_stages[:idx] +
-        [item | combine({'pk': (all_stages.json.results | selectattr('name', 'equalto', item.name) | map(attribute='pk') | first | default(''))})] +
-        resolved_stages[idx + 1:]
-      }}
+    resolved_stages: "{{ resolved_stages | default([]) + [item | combine({'pk': (all_stages.json.results | selectattr('name', 'equalto', item.name) | map(attribute='pk') | first | default(''))})] }}"
   loop: "{{ ssh_password_flow.stages }}"
   loop_control:
-    index_var: idx
     label: "{{ item.name }}"
 
 - name: Verify all stages found
@@ -133,7 +104,7 @@
 
 - name: Identify already-bound stages
   ansible.builtin.set_fact:
-    bound_stage_pks: "{{ existing_bindings.json.results | default([]) | map(attribute='stage') | list }}"
+    bound_stage_pks: "{{ (existing_bindings.json.results | default([]) | map(attribute='stage') | list) if (existing_bindings is not skipped) else [] }}"
 
 - name: Bind stages to SSH password flow
   ansible.builtin.uri:
@@ -164,14 +135,8 @@
 #===============================================================================
 
 - name: Display SSH password flow configuration
-  ansible.builtin.pause:
-    seconds: 0
-    prompt: |
-
-      SSH Password Authentication Flow:
-        Flow: {{ ssh_password_flow.slug }}
-        Stages:
-      {% for stage in resolved_stages %}
-          {{ stage.order }}: {{ stage.name }}
-      {% endfor %}
-        Status: {{ 'created' if not ssh_flow_exists else 'already exists' }}
+  ansible.builtin.debug:
+    msg:
+      - "SSH Password Authentication Flow: {{ ssh_password_flow.slug }}"
+      - "Stages: {{ resolved_stages | map(attribute='name') | list | join(', ') }}"
+      - "Status: {{ 'created' if not ssh_flow_exists else 'already exists' }}"
