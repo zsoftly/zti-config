@@ -56,6 +56,7 @@ mock_roles:
   - system_updates
   - firmware_updates
   - otel_collector
+  - 15_ssh_password_flow
   - 17_endpoint_agent
   - 18_endpoint_pam_exec
   - ssh_hardening
