@@ -104,41 +104,14 @@
     - created_flow.json is defined
   tags: [authentik, pam-exec]
 
-- name: Display flow creation status
-  ansible.builtin.debug:
-    msg: "Created SSH password authentication flow '{{ authentik_flow_slug }}' with 3 stage bindings"
-  run_once: true
-  when:
-    - not ssh_flow_exists
-    - has_api_token | default(false)
-    - not ansible_check_mode
-  tags: [authentik, pam-exec]
-
-# --- Fail if flow missing and no API token to create it ---
-
-- name: Fail if no API token available to check or create flow
+- name: Fail if SSH password flow cannot be verified or created
   ansible.builtin.fail:
-    msg: >-
-      Cannot verify or create the '{{ authentik_flow_slug }}' flow without an API token.
-      Set vault_authentik_token in inventory vault, or create the flow manually:
-        ansible-playbook collections/authentik/playbooks/configure.yml --tags ssh_password_flow
+    msg: "Cannot verify or create '{{ authentik_flow_slug }}' flow. Set vault_authentik_token or create the flow manually."
   run_once: true
   when:
-    - not has_api_token
+    - not (ssh_flow_exists | default(false))
+    - not (has_api_token | default(false))
     - not ansible_check_mode
-  tags: [authentik, pam-exec]
-
-- name: Fail if flow does not exist and could not be created
-  ansible.builtin.fail:
-    msg: >-
-      The '{{ authentik_flow_slug }}' flow does not exist in authentik at {{ authentik_url }}
-      and flow creation failed. Check the errors above.
-  run_once: true
-  when:
-    - has_api_token
-    - not ssh_flow_exists
-    - not ansible_check_mode
-    - created_flow is skipped or created_flow is not defined
   tags: [authentik, pam-exec]
 
 #===============================================================================
