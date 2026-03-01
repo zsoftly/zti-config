@@ -75,7 +75,9 @@
   ansible.builtin.debug:
     msg:
       - "Host: {{ inventory_hostname }}"
-      - "Updates: {{ 'Applied' if firmware_updates_result.changed | default(false) else ('Available' if firmware_updates_check.rc == 0 else 'None') }}"
+      - >-
+        Updates: {{ 'Applied' if firmware_updates_result.changed | default(false)
+        else ('Available' if firmware_updates_check.rc == 0 else 'None') }}
       - "Reboot: {{ 'Required' if firmware_updates_result.changed | default(false) else 'No' }}"
   tags: [firmware, report]
 
@@ -87,5 +89,7 @@
 
 - name: Set reboot needed fact
   ansible.builtin.set_fact:
-    firmware_updates_reboot_needed: "{{ firmware_updates_reboot_required.stat.exists or firmware_updates_result.changed | default(false) }}"
+    firmware_updates_reboot_needed: >-
+      {{ firmware_updates_reboot_required.stat.exists or
+      firmware_updates_result.changed | default(false) }}
   tags: [firmware, reboot]
