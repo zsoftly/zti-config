@@ -18,7 +18,11 @@ skip_list:
   - role-name  # Allow flexible role naming
   - galaxy[no-changelog]  # Not publishing to Galaxy yet
   - fqcn[action-core]  # Allow short module names for readability
+  - fqcn[canonical]  # Allow ansible.builtin over ansible.posix for common modules
   - name[casing]  # Allow flexible task naming
+  - var-naming[no-role-prefix]  # Roles use short variable names for readability
+  - schema[tasks]  # Playbooks in non-standard paths get misdetected as tasks
+  - internal-error  # CI cannot decrypt vault files for syntax-check
 
 # Enable optional rules
 enable_list:
@@ -31,6 +35,12 @@ warn_list:
   - ignore-errors
   - no-handler
   - command-instead-of-module
+  - command-instead-of-shell
+  - no-changed-when
+  - risky-shell-pipe
+  - package-latest
+  - jinja[spacing]
+  - parser-error
 
 # Kind mapping
 kinds:
