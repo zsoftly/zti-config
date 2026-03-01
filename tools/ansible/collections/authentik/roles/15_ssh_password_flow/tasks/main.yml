@@ -16,6 +16,7 @@
     status_code: 200
   register: existing_flow
   check_mode: false
+  no_log: true
 
 - name: Set flow existence fact
   ansible.builtin.set_fact:
@@ -49,6 +50,7 @@
     - not ansible_check_mode
     - not ssh_flow_exists
   register: created_flow
+  no_log: true
 
 - name: Set flow PK after creation
   ansible.builtin.set_fact:
@@ -63,13 +65,14 @@
 
 - name: Get all stages
   ansible.builtin.uri:
-    url: "{{ authentik_url }}{{ authentik_api_path }}/stages/all/?page_size=200"
+    url: "{{ authentik_url }}{{ authentik_api_path }}/stages/all/?page_size=500"
     method: GET
     headers:
       Authorization: "Bearer {{ authentik_token | trim }}"
     status_code: 200
   register: all_stages
   check_mode: false
+  no_log: true
 
 - name: Resolve each stage PK
   ansible.builtin.set_fact:
@@ -100,6 +103,7 @@
     status_code: 200
   register: existing_bindings
   check_mode: false
+  no_log: true
   when: ssh_flow_pk | length > 0
 
 - name: Identify already-bound stages
@@ -129,6 +133,7 @@
     - not ansible_check_mode
     - ssh_flow_pk | length > 0
     - item.pk not in bound_stage_pks
+  no_log: true
 
 #===============================================================================
 # SUMMARY

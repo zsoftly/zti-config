@@ -19,7 +19,7 @@ import urllib.request
 # Configuration (rendered by Ansible)
 AUTHENTIK_URL = "{{ authentik_url }}"
 FLOW_SLUG = "{{ authentik_flow_slug }}"
-SKIP_SSL_VERIFY = {{ authentik_pam_exec_skip_ssl_verify | lower }}
+SKIP_SSL_VERIFY = {{ authentik_pam_exec_skip_ssl_verify | ternary('True', 'False') }}
 UID_THRESHOLD = {{ authentik_pam_exec_uid_threshold }}
 
 

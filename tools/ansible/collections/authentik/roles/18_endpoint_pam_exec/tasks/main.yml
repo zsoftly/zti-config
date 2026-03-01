@@ -25,6 +25,7 @@
   check_mode: false
   delegate_to: localhost
   run_once: true
+  no_log: true
   when: has_api_token
   tags: [authentik, pam-exec]
 
@@ -51,6 +52,7 @@
   register: created_flow
   delegate_to: localhost
   run_once: true
+  no_log: true
   when:
     - not ssh_flow_exists
     - has_api_token | default(false)
@@ -59,7 +61,7 @@
 
 - name: Get all stages for binding
   ansible.builtin.uri:
-    url: "{{ authentik_url }}/api/v3/stages/all/?page_size=200"
+    url: "{{ authentik_url }}/api/v3/stages/all/?page_size=500"
     method: GET
     headers:
       Authorization: "Bearer {{ vault_authentik_token | trim }}"
@@ -67,6 +69,7 @@
   register: all_stages
   delegate_to: localhost
   run_once: true
+  no_log: true
   when:
     - not ssh_flow_exists
     - has_api_token | default(false)
@@ -97,6 +100,7 @@
     label: "{{ item.name }} (order {{ item.order }})"
   delegate_to: localhost
   run_once: true
+  no_log: true
   when:
     - not ssh_flow_exists
     - has_api_token | default(false)

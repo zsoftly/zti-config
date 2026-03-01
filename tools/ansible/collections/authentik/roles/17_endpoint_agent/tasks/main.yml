@@ -274,30 +274,44 @@
   failed_when: false  # User might not exist in NSS yet
   tags: [authentik, agent, ssh-keys]
 
-- name: Create .ssh directories for Authentik users
-  ansible.builtin.file:
-    path: "/home/{{ item.username }}/.ssh"
-    state: directory
-    owner: "{{ item.username }}"
-    group: "{{ item.username }}"
-    mode: "0700"
+- name: Check if Authentik users exist in NSS
+  ansible.builtin.command: getent passwd {{ item.username }}
   loop: "{{ authentik_ssh_users | default([]) }}"
   when:
     - item.state == 'present'
     - item.ssh_keys | default([]) | length > 0
+  register: user_getent
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  tags: [authentik, agent, ssh-keys]
+
+- name: Create .ssh directories for Authentik users
+  ansible.builtin.file:
+    path: "/home/{{ item.item.username }}/.ssh"
+    state: directory
+    owner: "{{ item.item.username }}"
+    group: "{{ item.item.username }}"
+    mode: "0700"
+  loop: "{{ user_getent.results | default([]) }}"
+  when:
+    - item.rc == 0
+  loop_control:
+    label: "{{ item.item.username }}"
   tags: [authentik, agent, ssh-keys]
 
 - name: Provision SSH authorized_keys for Authentik users
   ansible.builtin.authorized_key:
-    user: "{{ item.username }}"
-    key: "{{ item.ssh_keys | join('\n') }}"
+    user: "{{ item.item.username }}"
+    key: "{{ item.item.ssh_keys | join('\n') }}"
     state: present
     exclusive: true  # Remove any keys not in the list
     manage_dir: false  # We already created the directory
-  loop: "{{ authentik_ssh_users | default([]) }}"
+  loop: "{{ user_getent.results | default([]) }}"
   when:
-    - item.state == 'present'
-    - item.ssh_keys | default([]) | length > 0
+    - item.rc == 0
+  loop_control:
+    label: "{{ item.item.username }}"
   tags: [authentik, agent, ssh-keys]
 
 - name: Remove SSH access for offboarded users

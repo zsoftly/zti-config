@@ -65,8 +65,7 @@
       ansible.builtin.assert:
         that:
           - authentik_url is defined
-          - vault_authentik_token is defined
-          - vault_authentik_token | trim | length > 0
+          - vault_authentik_token is defined and vault_authentik_token | trim | length > 0
         fail_msg: >-
           No enrollment token in vault and no API token available.
           Either set vault_authentik_agent_enrollment_token in inventory vault,
@@ -81,6 +80,7 @@
           Authorization: "Bearer {{ vault_authentik_token | trim }}"
         status_code: 200
       register: existing_tokens
+      no_log: true
       when: not token_already_set
 
     - name: Verify at least one enrollment token exists

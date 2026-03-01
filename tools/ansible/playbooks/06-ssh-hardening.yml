@@ -16,7 +16,7 @@
 #   fail2ban     - Fail2ban only
 
 - name: SSH Hardening with Authentik Authentication
-  hosts: all
+  hosts: endpoints
   become: true
 
   roles:
