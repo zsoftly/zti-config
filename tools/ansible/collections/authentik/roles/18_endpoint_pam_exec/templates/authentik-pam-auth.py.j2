@@ -1,0 +1,118 @@
+#!/usr/bin/env python3
+"""
+Authentik PAM Exec Authentication Script
+Validates passwords against authentik's flow executor API via pam_exec.
+
+Managed by Ansible - do not edit manually.
+
+Usage: Called by pam_exec with expose_authtok. The password is read from stdin.
+Exit 0 = authentication success, non-zero = failure.
+"""
+
+import http.cookiejar
+import json
+import os
+import sys
+import syslog
+import urllib.request
+
+# Configuration (rendered by Ansible)
+AUTHENTIK_URL = "{{ authentik_url }}"
+FLOW_SLUG = "{{ authentik_flow_slug }}"
+SKIP_SSL_VERIFY = {{ authentik_pam_exec_skip_ssl_verify | ternary('True', 'False') }}
+UID_THRESHOLD = {{ authentik_pam_exec_uid_threshold }}
+
+
+def log(msg, priority=syslog.LOG_INFO):
+    """Log to syslog."""
+    syslog.openlog("authentik-pam", syslog.LOG_PID, syslog.LOG_AUTH)
+    syslog.syslog(priority, msg)
+    syslog.closelog()
+
+
+def authenticate(username, password):
+    """Authenticate a user against authentik's flow executor API."""
+    base = f"{AUTHENTIK_URL}/api/v3/flows/executor/{FLOW_SLUG}/"
+
+    if SKIP_SSL_VERIFY:
+        import ssl
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        handler = urllib.request.HTTPSHandler(context=ctx)
+    else:
+        handler = urllib.request.HTTPSHandler()
+
+    cj = http.cookiejar.CookieJar()
+    opener = urllib.request.build_opener(handler, urllib.request.HTTPCookieProcessor(cj))
+
+    try:
+        # Stage 1: Initiate the flow and get the challenge
+        opener.open(base, timeout=10)
+
+        # Stage 2: Submit identification (username)
+        req2 = urllib.request.Request(
+            base,
+            data=json.dumps({"uid_field": username}).encode(),
+            headers={"Content-Type": "application/json"},
+        )
+        r2 = json.loads(opener.open(req2, timeout=10).read())
+        if r2.get("component") != "ak-stage-password":
+            log(f"Unexpected stage after identification: {r2.get('component')}", syslog.LOG_ERR)
+            return False
+
+        # Stage 3: Submit password
+        req3 = urllib.request.Request(
+            base,
+            data=json.dumps({"password": password}).encode(),
+            headers={"Content-Type": "application/json"},
+        )
+        r3 = json.loads(opener.open(req3, timeout=10).read())
+        if r3.get("component") == "xak-flow-redirect":
+            log(f"Authentication successful for user: {username}")
+            return True
+
+        log(
+            f"Authentication failed for user: {username} (component: {r3.get('component')})",
+            syslog.LOG_WARNING,
+        )
+        return False
+
+    except Exception as e:
+        log(f"authentik-pam: {e}", syslog.LOG_ERR)
+        return False
+
+
+def main():
+    # Get the username from PAM environment
+    username = os.environ.get("PAM_USER", "")
+    if not username:
+        log("No PAM_USER set", syslog.LOG_ERR)
+        sys.exit(1)
+
+    # Check UID threshold - skip authentik for local/system users
+    try:
+        import pwd
+        user_info = pwd.getpwnam(username)
+        if user_info.pw_uid < UID_THRESHOLD:
+            log(f"User {username} (uid={user_info.pw_uid}) below threshold, skipping")
+            sys.exit(1)
+    except KeyError:
+        # User not in local passwd/NSS yet — proceed with authentik auth
+        pass
+
+    # Read password from stdin (provided by pam_exec with expose_authtok)
+    password = sys.stdin.readline().rstrip("\n")
+    if not password:
+        log(f"No password provided for user: {username}", syslog.LOG_ERR)
+        sys.exit(1)
+
+    # Authenticate against authentik
+    if authenticate(username, password):
+        sys.exit(0)
+    else:
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

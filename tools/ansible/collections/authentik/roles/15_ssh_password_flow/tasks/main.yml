@@ -1,0 +1,147 @@
+---
+# 15_ssh_password_flow - Create SSH Password Authentication Flow
+# Creates a clean 3-stage authentication flow for PAM exec SSH auth.
+# No EndpointStage = no enterprise license required.
+
+#===============================================================================
+# CHECK - Does the flow already exist?
+#===============================================================================
+
+- name: Check if SSH password flow exists
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/flows/instances/?slug={{ ssh_password_flow.slug }}"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: existing_flow
+  check_mode: false
+  no_log: true
+
+- name: Set flow existence fact
+  ansible.builtin.set_fact:
+    ssh_flow_exists: "{{ existing_flow.json.results | length > 0 }}"
+    ssh_flow_pk: "{{ (existing_flow.json.results | first | default({})).pk | default('') }}"
+
+- name: Show flow status (check mode)
+  ansible.builtin.debug:
+    msg: "SSH password flow '{{ ssh_password_flow.slug }}' {{ 'exists' if ssh_flow_exists else 'will be created' }}"
+  when: ansible_check_mode
+
+#===============================================================================
+# CREATE - Flow
+#===============================================================================
+
+- name: Create SSH password authentication flow
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/flows/instances/"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      name: "{{ ssh_password_flow.name }}"
+      slug: "{{ ssh_password_flow.slug }}"
+      designation: "{{ ssh_password_flow.designation }}"
+      title: "{{ ssh_password_flow.title }}"
+    status_code: [200, 201]
+  when:
+    - not ansible_check_mode
+    - not ssh_flow_exists
+  register: created_flow
+  no_log: true
+
+- name: Set flow PK after creation
+  ansible.builtin.set_fact:
+    ssh_flow_pk: "{{ created_flow.json.pk }}"
+  when:
+    - not ssh_flow_exists
+    - created_flow.json is defined
+
+#===============================================================================
+# LOOKUP - Existing stages by name
+#===============================================================================
+
+- name: Get all stages
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/stages/all/?page_size=500"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: all_stages
+  check_mode: false
+  no_log: true
+
+- name: Resolve each stage PK
+  ansible.builtin.set_fact:
+    resolved_stages: "{{ resolved_stages | default([]) + [item | combine({'pk': (all_stages.json.results | selectattr('name', 'equalto', item.name) | map(attribute='pk') | first | default(''))})] }}"
+  loop: "{{ ssh_password_flow.stages }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Verify all stages found
+  ansible.builtin.assert:
+    that:
+      - item.pk | length > 0
+    fail_msg: "Stage '{{ item.name }}' not found in authentik. Ensure default stages exist."
+  loop: "{{ resolved_stages }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+#===============================================================================
+# BIND - Stages to flow
+#===============================================================================
+
+- name: Get existing flow bindings
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/flows/bindings/?target={{ ssh_flow_pk }}"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+    status_code: 200
+  register: existing_bindings
+  check_mode: false
+  no_log: true
+  when: ssh_flow_pk | length > 0
+
+- name: Identify already-bound stages
+  ansible.builtin.set_fact:
+    bound_stage_pks: "{{ (existing_bindings.json.results | default([]) | map(attribute='stage') | list) if (existing_bindings is not skipped) else [] }}"
+
+- name: Bind stages to SSH password flow
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ authentik_api_path }}/flows/bindings/"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      target: "{{ ssh_flow_pk }}"
+      stage: "{{ item.pk }}"
+      order: "{{ item.order }}"
+      evaluate_on_plan: true
+      re_evaluate_policies: true
+      invalid_response_action: "retry"
+    status_code: [200, 201]
+  loop: "{{ resolved_stages }}"
+  loop_control:
+    label: "{{ item.name }} (order {{ item.order }})"
+  when:
+    - not ansible_check_mode
+    - ssh_flow_pk | length > 0
+    - item.pk not in bound_stage_pks
+  no_log: true
+
+#===============================================================================
+# SUMMARY
+#===============================================================================
+
+- name: Display SSH password flow configuration
+  ansible.builtin.debug:
+    msg:
+      - "SSH Password Authentication Flow: {{ ssh_password_flow.slug }}"
+      - "Stages: {{ resolved_stages | map(attribute='name') | list | join(', ') }}"
+      - "Status: {{ 'created' if not ssh_flow_exists else 'already exists' }}"
