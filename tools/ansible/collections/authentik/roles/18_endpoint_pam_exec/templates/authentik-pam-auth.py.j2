@@ -17,6 +17,7 @@ import sys
 import syslog
 import urllib.error
 import urllib.request
+from urllib.parse import urlparse
 
 # Configuration (rendered by Ansible)
 AUTHENTIK_URL = "{{ authentik_url }}"
@@ -35,6 +36,10 @@ def log(msg, priority=syslog.LOG_INFO):
 
 def authenticate(username, password):
     """Authenticate a user against authentik's flow executor API."""
+    if urlparse(AUTHENTIK_URL).scheme.lower() != "https":
+        log("AUTHENTIK_URL must use https://", syslog.LOG_ERR)
+        return False
+
     base = f"{AUTHENTIK_URL}/api/v3/flows/executor/{FLOW_SLUG}/"
 
     if SKIP_SSL_VERIFY:

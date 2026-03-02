@@ -4,6 +4,17 @@
 # No EndpointStage = no enterprise license required.
 
 #===============================================================================
+# PRE-FLIGHT - Validate authentik URL
+#===============================================================================
+
+- name: Validate authentik_url uses HTTPS
+  ansible.builtin.assert:
+    that:
+      - authentik_url is defined
+      - authentik_url is match('^https://')
+    fail_msg: "authentik_url must use https:// to protect API credentials in transit."
+
+#===============================================================================
 # CHECK - Does the flow already exist?
 #===============================================================================
 
@@ -14,18 +25,18 @@
     headers:
       Authorization: "Bearer {{ authentik_token | trim }}"
     status_code: 200
-  register: 15_ssh_password_flow_existing_flow
+  register: ssh_password_flow_existing_flow
   check_mode: false
   no_log: true
 
 - name: Set flow existence fact
   ansible.builtin.set_fact:
-    15_ssh_password_flow_exists: "{{ 15_ssh_password_flow_existing_flow.json.results | length > 0 }}"
-    15_ssh_password_flow_pk: "{{ (15_ssh_password_flow_existing_flow.json.results | first | default({})).pk | default('') }}"
+    ssh_password_flow_exists: "{{ ssh_password_flow_existing_flow.json.results | length > 0 }}"
+    ssh_password_flow_pk: "{{ (ssh_password_flow_existing_flow.json.results | first | default({})).pk | default('') }}"
 
 - name: Show flow status (check mode)
   ansible.builtin.debug:
-    msg: "SSH password flow '{{ ssh_password_flow.slug }}' {{ 'exists' if 15_ssh_password_flow_exists else 'will be created' }}"
+    msg: "SSH password flow '{{ ssh_password_flow.slug }}' {{ 'exists' if ssh_password_flow_exists else 'will be created' }}"
   when: ansible_check_mode
 
 #===============================================================================
@@ -48,16 +59,16 @@
     status_code: [200, 201]
   when:
     - not ansible_check_mode
-    - not 15_ssh_password_flow_exists
-  register: 15_ssh_password_flow_created_flow
+    - not ssh_password_flow_exists
+  register: ssh_password_flow_created_flow
   no_log: true
 
 - name: Set flow PK after creation
   ansible.builtin.set_fact:
-    15_ssh_password_flow_pk: "{{ 15_ssh_password_flow_created_flow.json.pk }}"
+    ssh_password_flow_pk: "{{ ssh_password_flow_created_flow.json.pk }}"
   when:
-    - not 15_ssh_password_flow_exists
-    - 15_ssh_password_flow_created_flow.json is defined
+    - not ssh_password_flow_exists
+    - ssh_password_flow_created_flow.json is defined
 
 #===============================================================================
 # LOOKUP - Existing stages by name
@@ -71,13 +82,13 @@
     headers:
       Authorization: "Bearer {{ authentik_token | trim }}"
     status_code: 200
-  register: 15_ssh_password_flow_all_stages
+  register: ssh_password_flow_all_stages
   check_mode: false
   no_log: true
 
 - name: Resolve each stage PK
   ansible.builtin.set_fact:
-    15_ssh_password_flow_resolved_stages: "{{ 15_ssh_password_flow_resolved_stages | default([]) + [item | combine({'pk': (15_ssh_password_flow_all_stages.json.results | selectattr('name', 'equalto', item.name) | map(attribute='pk') | first | default(''))})] }}"
+    ssh_password_flow_resolved_stages: "{{ ssh_password_flow_resolved_stages | default([]) + [item | combine({'pk': (ssh_password_flow_all_stages.json.results | selectattr('name', 'equalto', item.name) | map(attribute='pk') | first | default(''))})] }}"
   loop: "{{ ssh_password_flow.stages }}"
   loop_control:
     label: "{{ item.name }}"
@@ -87,7 +98,7 @@
     that:
       - item.pk | length > 0
     fail_msg: "Stage '{{ item.name }}' not found in authentik. Ensure default stages exist."
-  loop: "{{ 15_ssh_password_flow_resolved_stages }}"
+  loop: "{{ ssh_password_flow_resolved_stages }}"
   loop_control:
     label: "{{ item.name }}"
 
@@ -97,19 +108,19 @@
 
 - name: Get existing flow bindings
   ansible.builtin.uri:
-    url: "{{ authentik_url }}{{ authentik_api_path }}/flows/bindings/?target={{ 15_ssh_password_flow_pk }}"
+    url: "{{ authentik_url }}{{ authentik_api_path }}/flows/bindings/?target={{ ssh_password_flow_pk }}"
     method: GET
     headers:
       Authorization: "Bearer {{ authentik_token | trim }}"
     status_code: 200
-  register: 15_ssh_password_flow_existing_bindings
+  register: ssh_password_flow_existing_bindings
   check_mode: false
   no_log: true
-  when: 15_ssh_password_flow_pk | length > 0
+  when: ssh_password_flow_pk | length > 0
 
 - name: Identify already-bound stages
   ansible.builtin.set_fact:
-    15_ssh_password_flow_bound_stage_pks: "{{ (15_ssh_password_flow_existing_bindings.json.results | default([]) | map(attribute='stage') | list) if (15_ssh_password_flow_existing_bindings is not skipped) else [] }}"
+    ssh_password_flow_bound_stage_pks: "{{ (ssh_password_flow_existing_bindings.json.results | default([]) | map(attribute='stage') | list) if (ssh_password_flow_existing_bindings is not skipped) else [] }}"
 
 - name: Bind stages to SSH password flow
   ansible.builtin.uri:
@@ -120,20 +131,20 @@
       Content-Type: "application/json"
     body_format: json
     body:
-      target: "{{ 15_ssh_password_flow_pk }}"
+      target: "{{ ssh_password_flow_pk }}"
       stage: "{{ item.pk }}"
       order: "{{ item.order }}"
       evaluate_on_plan: true
       re_evaluate_policies: true
       invalid_response_action: "retry"
     status_code: [200, 201]
-  loop: "{{ 15_ssh_password_flow_resolved_stages }}"
+  loop: "{{ ssh_password_flow_resolved_stages }}"
   loop_control:
     label: "{{ item.name }} (order {{ item.order }})"
   when:
     - not ansible_check_mode
-    - 15_ssh_password_flow_pk | length > 0
-    - item.pk not in 15_ssh_password_flow_bound_stage_pks
+    - ssh_password_flow_pk | length > 0
+    - item.pk not in ssh_password_flow_bound_stage_pks
   no_log: true
 
 #===============================================================================
@@ -144,5 +155,5 @@
   ansible.builtin.debug:
     msg:
       - "SSH Password Authentication Flow: {{ ssh_password_flow.slug }}"
-      - "Stages: {{ 15_ssh_password_flow_resolved_stages | map(attribute='name') | list | join(', ') }}"
-      - "Status: {{ 'created' if not 15_ssh_password_flow_exists else 'already exists' }}"
+      - "Stages: {{ ssh_password_flow_resolved_stages | map(attribute='name') | list | join(', ') }}"
+      - "Status: {{ 'created' if not ssh_password_flow_exists else 'already exists' }}"

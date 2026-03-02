@@ -7,9 +7,19 @@
 # PRE-FLIGHT - Ensure SSH password authentication flow exists
 #===============================================================================
 
+- name: Validate authentik_url uses HTTPS
+  ansible.builtin.assert:
+    that:
+      - authentik_url is defined
+      - authentik_url is match('^https://')
+    fail_msg: "authentik_url must use https:// to protect API credentials in transit."
+  run_once: true
+  delegate_to: localhost
+  tags: [authentik, pam-exec]
+
 - name: Check if API token is available
   ansible.builtin.set_fact:
-    18_endpoint_pam_exec_has_api_token: "{{ vault_authentik_token is defined and vault_authentik_token | trim | length > 0 }}"
+    endpoint_pam_exec_has_api_token: "{{ vault_authentik_token is defined and vault_authentik_token | trim | length > 0 }}"
   run_once: true
   tags: [authentik, pam-exec]
 
@@ -20,18 +30,18 @@
     headers:
       Authorization: "Bearer {{ vault_authentik_token | trim }}"
     status_code: 200
-  register: 18_endpoint_pam_exec_flow_check
+  register: endpoint_pam_exec_flow_check
   changed_when: false
   check_mode: false
   delegate_to: localhost
   run_once: true
   no_log: true
-  when: 18_endpoint_pam_exec_has_api_token
+  when: endpoint_pam_exec_has_api_token
   tags: [authentik, pam-exec]
 
 - name: Set flow existence fact
   ansible.builtin.set_fact:
-    18_endpoint_pam_exec_flow_exists: "{{ 18_endpoint_pam_exec_has_api_token and (18_endpoint_pam_exec_flow_check.json.results | default([]) | length > 0) }}"
+    endpoint_pam_exec_flow_exists: "{{ endpoint_pam_exec_has_api_token and (endpoint_pam_exec_flow_check.json.results | default([]) | length > 0) }}"
   run_once: true
   tags: [authentik, pam-exec]
 
@@ -49,13 +59,13 @@
       designation: "authentication"
       title: "SSH Password Authentication"
     status_code: [200, 201]
-  register: 18_endpoint_pam_exec_created_flow
+  register: endpoint_pam_exec_created_flow
   delegate_to: localhost
   run_once: true
   no_log: true
   when:
-    - not 18_endpoint_pam_exec_flow_exists
-    - 18_endpoint_pam_exec_has_api_token | default(false)
+    - not endpoint_pam_exec_flow_exists
+    - endpoint_pam_exec_has_api_token | default(false)
     - not ansible_check_mode
   tags: [authentik, pam-exec]
 
@@ -67,20 +77,20 @@
     headers:
       Authorization: "Bearer {{ vault_authentik_token | trim }}"
     status_code: 200
-  register: 18_endpoint_pam_exec_all_stages
+  register: endpoint_pam_exec_all_stages
   delegate_to: localhost
   run_once: true
   no_log: true
   when:
-    - not 18_endpoint_pam_exec_flow_exists
-    - 18_endpoint_pam_exec_has_api_token | default(false)
+    - not endpoint_pam_exec_flow_exists
+    - endpoint_pam_exec_has_api_token | default(false)
     - not ansible_check_mode
   tags: [authentik, pam-exec]
 
 - name: Validate required stages exist before binding
   ansible.builtin.assert:
     that:
-      - 18_endpoint_pam_exec_all_stages.json.results | selectattr('name', 'equalto', item.name) | list | length > 0
+      - endpoint_pam_exec_all_stages.json.results | selectattr('name', 'equalto', item.name) | list | length > 0
     fail_msg: "Required stage '{{ item.name }}' not found in authentik. Ensure default stages exist."
   loop:
     - {name: "default-authentication-identification"}
@@ -91,10 +101,10 @@
   delegate_to: localhost
   run_once: true
   when:
-    - not 18_endpoint_pam_exec_flow_exists
-    - 18_endpoint_pam_exec_has_api_token | default(false)
+    - not endpoint_pam_exec_flow_exists
+    - endpoint_pam_exec_has_api_token | default(false)
     - not ansible_check_mode
-    - 18_endpoint_pam_exec_all_stages.json is defined
+    - endpoint_pam_exec_all_stages.json is defined
   tags: [authentik, pam-exec]
 
 - name: Bind default stages to SSH password flow
@@ -106,8 +116,8 @@
       Content-Type: "application/json"
     body_format: json
     body:
-      target: "{{ 18_endpoint_pam_exec_created_flow.json.pk }}"
-      stage: "{{ 18_endpoint_pam_exec_all_stages.json.results | selectattr('name', 'equalto', item.name) | map(attribute='pk') | first }}"
+      target: "{{ endpoint_pam_exec_created_flow.json.pk }}"
+      stage: "{{ endpoint_pam_exec_all_stages.json.results | selectattr('name', 'equalto', item.name) | map(attribute='pk') | first }}"
       order: "{{ item.order }}"
       evaluate_on_plan: true
       re_evaluate_policies: true
@@ -123,10 +133,10 @@
   run_once: true
   no_log: true
   when:
-    - not 18_endpoint_pam_exec_flow_exists
-    - 18_endpoint_pam_exec_has_api_token | default(false)
+    - not endpoint_pam_exec_flow_exists
+    - endpoint_pam_exec_has_api_token | default(false)
     - not ansible_check_mode
-    - 18_endpoint_pam_exec_created_flow.json is defined
+    - endpoint_pam_exec_created_flow.json is defined
   tags: [authentik, pam-exec]
 
 - name: Fail if SSH password flow cannot be verified or created
@@ -134,8 +144,8 @@
     msg: "Cannot verify or create '{{ authentik_flow_slug }}' flow. Set vault_authentik_token or create the flow manually."
   run_once: true
   when:
-    - not (18_endpoint_pam_exec_flow_exists | default(false))
-    - not (18_endpoint_pam_exec_has_api_token | default(false))
+    - not (endpoint_pam_exec_flow_exists | default(false))
+    - not (endpoint_pam_exec_has_api_token | default(false))
     - not ansible_check_mode
   tags: [authentik, pam-exec]
 
@@ -172,20 +182,20 @@
         dest: /etc/pam.d/common-auth
         mode: "0644"
         backup: true
-      register: 18_endpoint_pam_exec_pam_deploy
+      register: endpoint_pam_exec_pam_deploy
 
   rescue:
     - name: Restore common-auth backup on deployment failure
       ansible.builtin.copy:
-        src: "{{ 18_endpoint_pam_exec_pam_deploy.backup_file }}"
+        src: "{{ endpoint_pam_exec_pam_deploy.backup_file }}"
         dest: /etc/pam.d/common-auth
         remote_src: true
         mode: "0644"
-      when: 18_endpoint_pam_exec_pam_deploy.backup_file is defined
+      when: endpoint_pam_exec_pam_deploy.backup_file is defined
 
     - name: Fail after restoring PAM backup
       ansible.builtin.fail:
-        msg: "PAM configuration deployment failed. Backup restored from {{ 18_endpoint_pam_exec_pam_deploy.backup_file | default('unknown') }}."
+        msg: "PAM configuration deployment failed. Backup restored from {{ endpoint_pam_exec_pam_deploy.backup_file | default('unknown') }}."
 
 #===============================================================================
 # CONFIGURE - SSHD for Password Authentication
@@ -238,20 +248,20 @@
 - name: Verify PAM exec script exists and is executable
   ansible.builtin.stat:
     path: /opt/authentik-pam-auth.py
-  register: 18_endpoint_pam_exec_script
+  register: endpoint_pam_exec_script
   check_mode: false
   failed_when:
     - not ansible_check_mode
-    - not 18_endpoint_pam_exec_script.stat.exists or not 18_endpoint_pam_exec_script.stat.executable
+    - not endpoint_pam_exec_script.stat.exists or not endpoint_pam_exec_script.stat.executable
   tags: [authentik, pam-exec]
 
 - name: Validate sshd configuration
   ansible.builtin.command: sshd -t
-  register: 18_endpoint_pam_exec_sshd_validate
+  register: endpoint_pam_exec_sshd_validate
   changed_when: false
   failed_when:
     - not ansible_check_mode
-    - 18_endpoint_pam_exec_sshd_validate.rc != 0
+    - endpoint_pam_exec_sshd_validate.rc != 0
   tags: [authentik, pam-exec]
 
 - name: Display PAM exec configuration status

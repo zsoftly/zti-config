@@ -65,11 +65,13 @@
       ansible.builtin.assert:
         that:
           - authentik_url is defined
+          - authentik_url is match('^https://')
           - vault_authentik_token is defined and vault_authentik_token | trim | length > 0
         fail_msg: >-
           No enrollment token in vault and no API token available.
           Either set vault_authentik_agent_enrollment_token in inventory vault,
           or provide vault_authentik_token for API-based fetch.
+          authentik_url must use https://.
       when: not token_already_set | bool
 
     - name: Get existing enrollment tokens from API
@@ -91,9 +93,19 @@
           Run the manage-endpoint-devices playbook in aws-infra first to create one.
       when: not token_already_set | bool
 
+    - name: Select first non-expired enrollment token
+      ansible.builtin.set_fact:
+        selected_enrollment_token: >-
+          {{ existing_tokens.json.results
+             | rejectattr('expires', 'defined')
+             | list
+             | first
+             | default(existing_tokens.json.results | first) }}
+      when: not token_already_set | bool
+
     - name: Retrieve enrollment token key from API
       ansible.builtin.uri:
-        url: "{{ authentik_url }}{{ authentik_api_path }}/endpoints/agents/enrollment_tokens/{{ existing_tokens.json.results[0].token_uuid }}/view_key/"
+        url: "{{ authentik_url }}{{ authentik_api_path }}/endpoints/agents/enrollment_tokens/{{ selected_enrollment_token.token_uuid }}/view_key/"
         method: GET
         headers:
           Authorization: "Bearer {{ vault_authentik_token | trim }}"
@@ -110,7 +122,7 @@
 
     - name: Display token fetch status (API)
       ansible.builtin.debug:
-        msg: "Enrollment token fetched from API (expires: {{ existing_tokens.json.results[0].expires | default('never') }})"
+        msg: "Enrollment token fetched from API (token: {{ selected_enrollment_token.name | default('unnamed') }}, expires: {{ selected_enrollment_token.expires | default('never') }})"
       when: not token_already_set | bool
 
 #===============================================================================
