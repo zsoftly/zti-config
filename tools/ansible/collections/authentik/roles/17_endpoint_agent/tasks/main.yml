@@ -17,7 +17,7 @@
 
 - name: Check if SSSD is installed (Debian)
   ansible.builtin.command: dpkg -l sssd
-  register: sssd_installed
+  register: 17_endpoint_agent_sssd_installed
   changed_when: false
   failed_when: false
   check_mode: false
@@ -26,7 +26,7 @@
 
 - name: Check if SSSD is installed (RedHat)
   ansible.builtin.command: rpm -q sssd
-  register: sssd_installed
+  register: 17_endpoint_agent_sssd_installed
   changed_when: false
   failed_when: false
   check_mode: false
@@ -39,7 +39,7 @@
     dest: "/etc/sssd/sssd.conf.backup-{{ ansible_date_time.iso8601_basic_short }}"
     remote_src: true
     mode: "0600"
-  when: sssd_installed.rc == 0
+  when: 17_endpoint_agent_sssd_installed.rc == 0
   failed_when: false
   tags: [authentik, agent]
 
@@ -48,7 +48,7 @@
     name: sssd
     state: stopped
     enabled: false
-  when: sssd_installed.rc == 0
+  when: 17_endpoint_agent_sssd_installed.rc == 0
   failed_when: false
   tags: [authentik, agent]
 
@@ -73,7 +73,7 @@
   loop:
     - /var/lib/sss
     - /etc/sssd
-  when: sssd_installed.rc | default(1) == 0
+  when: 17_endpoint_agent_sssd_installed.rc | default(1) == 0
   tags: [authentik, agent]
 
 - name: Remove SSSD blocks from sshd_config
@@ -92,7 +92,7 @@
 - name: Check if Authentik repository already exists
   ansible.builtin.stat:
     path: /etc/apt/sources.list.d/authentik.list
-  register: authentik_repo_check
+  register: 17_endpoint_agent_repo_check
   check_mode: false
   tags: [authentik, agent]
 
@@ -102,17 +102,17 @@
     dest: /tmp/authentik-gpg-key.asc
     mode: "0644"
   check_mode: false
-  when: not authentik_repo_check.stat.exists
+  when: not 17_endpoint_agent_repo_check.stat.exists
   tags: [authentik, agent]
 
 - name: Verify GPG key fingerprint
   ansible.builtin.shell: |
     gpg --import-options show-only --import --fingerprint /tmp/authentik-gpg-key.asc 2>&1 | grep -q '82EE AAD5 531A 856A 9C72  6132 2217 2AF2 AAE3 A237'
-  register: gpg_verify
+  register: 17_endpoint_agent_gpg_verify
   changed_when: false
-  failed_when: gpg_verify.rc != 0
+  failed_when: 17_endpoint_agent_gpg_verify.rc != 0
   check_mode: false
-  when: not authentik_repo_check.stat.exists
+  when: not 17_endpoint_agent_repo_check.stat.exists
   tags: [authentik, agent]
 
 - name: Install Authentik GPG key
@@ -120,7 +120,7 @@
     cmd: gpg --dearmor --batch --yes -o /usr/share/keyrings/authentik-keyring.gpg /tmp/authentik-gpg-key.asc
   args:
     creates: /usr/share/keyrings/authentik-keyring.gpg
-  when: not authentik_repo_check.stat.exists
+  when: not 17_endpoint_agent_repo_check.stat.exists
   tags: [authentik, agent]
 
 - name: Add Authentik APT repository
@@ -129,13 +129,13 @@
     mode: "0644"
     content: |
       deb [signed-by=/usr/share/keyrings/authentik-keyring.gpg] https://pkg.goauthentik.io stable main
-  register: repo_added
+  register: 17_endpoint_agent_repo_added
   tags: [authentik, agent]
 
 - name: Update APT cache
   ansible.builtin.apt:
     update_cache: true
-  when: repo_added.changed
+  when: 17_endpoint_agent_repo_added.changed
   tags: [authentik, agent]
 
 - name: Install Authentik agent packages
@@ -149,14 +149,14 @@
     state: present
   when:
     - ansible_os_family == 'Debian'
-    - not ansible_check_mode or authentik_repo_check.stat.exists
+    - not ansible_check_mode or 17_endpoint_agent_repo_check.stat.exists
   tags: [authentik, agent]
 
 - name: Clean up temporary GPG key file
   ansible.builtin.file:
     path: /tmp/authentik-gpg-key.asc
     state: absent
-  when: not authentik_repo_check.stat.exists
+  when: not 17_endpoint_agent_repo_check.stat.exists
   tags: [authentik, agent]
 
 - name: Reload systemd daemon to recognize new services
@@ -172,13 +172,13 @@
 - name: Check if device is already enrolled
   ansible.builtin.stat:
     path: "/etc/authentik/domains/{{ authentik_domain_name }}.json"
-  register: enrollment_check
+  register: 17_endpoint_agent_enrollment_check
   check_mode: false
   tags: [authentik, agent]
 
 - name: Enroll device to Authentik
   when:
-    - not enrollment_check.stat.exists
+    - not 17_endpoint_agent_enrollment_check.stat.exists
     - not ansible_check_mode
   tags: [authentik, agent, enroll]
   block:
@@ -186,13 +186,13 @@
       ansible.builtin.tempfile:
         state: file
         suffix: .token
-      register: token_file
+      register: 17_endpoint_agent_token_file
       no_log: true
 
     - name: Write enrollment token to secure temporary file
       ansible.builtin.copy:
         content: "{{ vault_authentik_agent_enrollment_token }}"
-        dest: "{{ token_file.path }}"
+        dest: "{{ 17_endpoint_agent_token_file.path }}"
         mode: "0600"
         owner: root
         group: root
@@ -201,17 +201,17 @@
     - name: Run enrollment command
       ansible.builtin.command:
         cmd: ak-sysd domains join "{{ authentik_domain_name }}" --authentik-url "{{ authentik_url }}"
-        stdin: "{{ lookup('file', token_file.path) }}"
+        stdin: "{{ lookup('file', 17_endpoint_agent_token_file.path) }}"
       no_log: true
-      register: enrollment_result
-      failed_when: enrollment_result.rc != 0
+      register: 17_endpoint_agent_enrollment_result
+      failed_when: 17_endpoint_agent_enrollment_result.rc != 0
 
   always:
     - name: Remove temporary enrollment token file
       ansible.builtin.file:
-        path: "{{ token_file.path }}"
+        path: "{{ 17_endpoint_agent_token_file.path }}"
         state: absent
-      when: token_file.path is defined
+      when: 17_endpoint_agent_token_file.path is defined
       no_log: true
 
 - name: Enable and start Authentik system daemon
@@ -275,7 +275,7 @@
   when:
     - item.state == 'present'
     - item.ssh_keys | default([]) | length > 0
-  register: user_getent
+  register: 17_endpoint_agent_user_getent
   changed_when: false
   failed_when: false
   check_mode: false
@@ -284,7 +284,7 @@
 - name: Fail on unexpected getent errors (rc other than 0 or 2)
   ansible.builtin.fail:
     msg: "getent passwd failed for {{ item.item.username }} with rc={{ item.rc }}"
-  loop: "{{ user_getent.results | default([]) }}"
+  loop: "{{ 17_endpoint_agent_user_getent.results | default([]) }}"
   when:
     - item.rc is defined
     - item.rc not in [0, 2]
@@ -299,7 +299,7 @@
     owner: "{{ item.item.username }}"
     group: "{{ item.item.username }}"
     mode: "0700"
-  loop: "{{ user_getent.results | default([]) }}"
+  loop: "{{ 17_endpoint_agent_user_getent.results | default([]) }}"
   when:
     - item.rc == 0
   loop_control:
@@ -313,7 +313,7 @@
     state: present
     exclusive: "{{ endpoint_ssh_key_exclusive }}"
     manage_dir: false  # We already created the directory
-  loop: "{{ user_getent.results | default([]) }}"
+  loop: "{{ 17_endpoint_agent_user_getent.results | default([]) }}"
   when:
     - item.rc == 0
   loop_control:
@@ -380,27 +380,27 @@
 - name: Verify Authentik system daemon is running
   ansible.builtin.systemd:
     name: ak-sysd
-  register: sysd_status
+  register: 17_endpoint_agent_sysd_status
   failed_when:
     - not ansible_check_mode
-    - sysd_status.status.ActiveState != 'active'
+    - 17_endpoint_agent_sysd_status.status.ActiveState != 'active'
   tags: [authentik, agent, verify]
 
 - name: Verify device enrollment token exists
   ansible.builtin.stat:
     path: "/etc/authentik/domains/{{ authentik_domain_name }}.json"
-  register: device_token
+  register: 17_endpoint_agent_device_token
   check_mode: false
   failed_when:
     - not ansible_check_mode
-    - not device_token.stat.exists
+    - not 17_endpoint_agent_device_token.stat.exists
   tags: [authentik, agent, verify]
 
 - name: Display agent status
   ansible.builtin.debug:
     msg:
       - "Authentik agent installation complete"
-      - "System daemon (ak-sysd): {{ sysd_status.status.ActiveState | default('not started (check mode)') }}"
+      - "System daemon (ak-sysd): {{ 17_endpoint_agent_sysd_status.status.ActiveState | default('not started (check mode)') }}"
       - "User agent (ak-agent): Starts automatically on user login"
-      - "Device enrolled: {{ device_token.stat.exists }}"
+      - "Device enrolled: {{ 17_endpoint_agent_device_token.stat.exists }}"
   tags: [authentik, agent, verify]

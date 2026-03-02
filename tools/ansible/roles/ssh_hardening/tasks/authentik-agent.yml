@@ -240,9 +240,9 @@
     state: present
     backup: true
   loop:
-    - { db: "passwd", sources: "files systemd authentik" }
-    - { db: "group", sources: "files systemd authentik" }
-    - { db: "shadow", sources: "files authentik" }
+    - {db: "passwd", sources: "files systemd authentik"}
+    - {db: "group", sources: "files systemd authentik"}
+    - {db: "shadow", sources: "files authentik"}
   tags: [ssh, authentik, agent]
 
 - name: Configure PAM for Authentik authentication
