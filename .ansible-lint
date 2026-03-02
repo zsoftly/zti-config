@@ -47,8 +47,7 @@ kinds:
 
 # Mock modules
 mock_modules:
-  - authentik.*
-  - docker_compose
+    - docker_compose
 
 # Mock roles
 mock_roles:
