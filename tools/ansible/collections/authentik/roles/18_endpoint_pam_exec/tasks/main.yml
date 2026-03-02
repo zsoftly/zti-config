@@ -76,6 +76,26 @@
     - not ansible_check_mode
   tags: [authentik, pam-exec]
 
+- name: Validate required stages exist before binding
+  ansible.builtin.assert:
+    that:
+      - all_stages.json.results | selectattr('name', 'equalto', item.name) | list | length > 0
+    fail_msg: "Required stage '{{ item.name }}' not found in authentik. Ensure default stages exist."
+  loop:
+    - {name: "default-authentication-identification"}
+    - {name: "default-authentication-password"}
+    - {name: "default-authentication-login"}
+  loop_control:
+    label: "{{ item.name }}"
+  delegate_to: localhost
+  run_once: true
+  when:
+    - not ssh_flow_exists
+    - has_api_token | default(false)
+    - not ansible_check_mode
+    - all_stages.json is defined
+  tags: [authentik, pam-exec]
+
 - name: Bind default stages to SSH password flow
   ansible.builtin.uri:
     url: "{{ authentik_url }}/api/v3/flows/bindings/"

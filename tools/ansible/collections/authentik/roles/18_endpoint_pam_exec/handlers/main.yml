@@ -2,7 +2,7 @@
 # 18_endpoint_pam_exec - Service Handlers
 
 - name: restart sshd
-  ansible.builtin.systemd:
-    name: ssh
+  ansible.builtin.service:
+    name: "{{ 'ssh' if ansible_os_family == 'Debian' else 'sshd' }}"
     state: restarted
   listen: restart sshd
