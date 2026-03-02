@@ -19,6 +19,18 @@
   hosts: endpoints
   become: true
 
+  pre_tasks:
+    - name: Verify enrollment token is available
+      ansible.builtin.assert:
+        that:
+          - vault_authentik_agent_enrollment_token is defined
+          - vault_authentik_agent_enrollment_token | trim | length > 0
+        fail_msg: >-
+          vault_authentik_agent_enrollment_token is not set.
+          Either set it in inventory vault group_vars,
+          or use configure-ssh-endpoints.yml which fetches it from the API.
+      tags: [authentik, agent]
+
   roles:
     - role: ssh_hardening
       tags: [ssh]

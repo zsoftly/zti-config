@@ -61,7 +61,8 @@
 
 - name: Get all stages for binding
   ansible.builtin.uri:
-    url: "{{ authentik_url }}/api/v3/stages/all/?page_size=500"
+    # page_size=1000 to avoid pagination; typical installs have <100 stages
+    url: "{{ authentik_url }}/api/v3/stages/all/?page_size=1000"
     method: GET
     headers:
       Authorization: "Bearer {{ vault_authentik_token | trim }}"
@@ -162,13 +163,29 @@
 # CONFIGURE - PAM Stack (common-auth)
 #===============================================================================
 
-- name: Deploy common-auth with pam_exec configuration
-  ansible.builtin.template:
-    src: common-auth-pam-exec.j2
-    dest: /etc/pam.d/common-auth
-    mode: "0644"
-    backup: true
+- name: Deploy PAM configuration with backup restore on failure
   tags: [authentik, pam-exec]
+  block:
+    - name: Deploy common-auth with pam_exec configuration
+      ansible.builtin.template:
+        src: common-auth-pam-exec.j2
+        dest: /etc/pam.d/common-auth
+        mode: "0644"
+        backup: true
+      register: pam_deploy
+
+  rescue:
+    - name: Restore common-auth backup on deployment failure
+      ansible.builtin.copy:
+        src: "{{ pam_deploy.backup_file }}"
+        dest: /etc/pam.d/common-auth
+        remote_src: true
+        mode: "0644"
+      when: pam_deploy.backup_file is defined
+
+    - name: Fail after restoring PAM backup
+      ansible.builtin.fail:
+        msg: "PAM configuration deployment failed. Backup restored from {{ pam_deploy.backup_file | default('unknown') }}."
 
 #===============================================================================
 # CONFIGURE - SSHD for Password Authentication

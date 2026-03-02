@@ -12,8 +12,10 @@ Exit 0 = authentication success, non-zero = failure.
 import http.cookiejar
 import json
 import os
+import re
 import sys
 import syslog
+import urllib.error
 import urllib.request
 
 # Configuration (rendered by Ansible)
@@ -22,12 +24,13 @@ FLOW_SLUG = "{{ authentik_flow_slug }}"
 SKIP_SSL_VERIFY = {{ authentik_pam_exec_skip_ssl_verify | ternary('True', 'False') }}
 UID_THRESHOLD = {{ authentik_pam_exec_uid_threshold }}
 
+# Open syslog once at module level
+syslog.openlog("authentik-pam", syslog.LOG_PID, syslog.LOG_AUTH)
+
 
 def log(msg, priority=syslog.LOG_INFO):
     """Log to syslog."""
-    syslog.openlog("authentik-pam", syslog.LOG_PID, syslog.LOG_AUTH)
     syslog.syslog(priority, msg)
-    syslog.closelog()
 
 
 def authenticate(username, password):
@@ -48,7 +51,8 @@ def authenticate(username, password):
 
     try:
         # Stage 1: Initiate the flow and get the challenge
-        opener.open(base, timeout=10)
+        r1 = json.loads(opener.open(base, timeout=10).read())
+        log(f"Flow initiated, stage 1 component: {r1.get('component')}")
 
         # Stage 2: Submit identification (username)
         req2 = urllib.request.Request(
@@ -78,6 +82,15 @@ def authenticate(username, password):
         )
         return False
 
+    except urllib.error.HTTPError as e:
+        log(f"HTTP error from authentik: {e.code} {e.reason}", syslog.LOG_ERR)
+        return False
+    except urllib.error.URLError as e:
+        log(f"Connection error to authentik: {e.reason}", syslog.LOG_ERR)
+        return False
+    except json.JSONDecodeError as e:
+        log(f"Invalid JSON response from authentik: {e}", syslog.LOG_ERR)
+        return False
     except Exception as e:
         log(f"authentik-pam: {e}", syslog.LOG_ERR)
         return False
@@ -88,6 +101,11 @@ def main():
     username = os.environ.get("PAM_USER", "")
     if not username:
         log("No PAM_USER set", syslog.LOG_ERR)
+        sys.exit(1)
+
+    # Validate username to prevent injection attacks
+    if not re.match(r'^[a-zA-Z0-9._-]+$', username):
+        log(f"Invalid PAM_USER value: rejected by validation", syslog.LOG_ERR)
         sys.exit(1)
 
     # Check UID threshold - skip authentik for local/system users

@@ -65,7 +65,8 @@
 
 - name: Get all stages
   ansible.builtin.uri:
-    url: "{{ authentik_url }}{{ authentik_api_path }}/stages/all/?page_size=500"
+    # page_size=1000 to avoid pagination; typical installs have <100 stages
+    url: "{{ authentik_url }}{{ authentik_api_path }}/stages/all/?page_size=1000"
     method: GET
     headers:
       Authorization: "Bearer {{ authentik_token | trim }}"

@@ -15,26 +15,28 @@
 # BACKUP & CLEANUP - Remove SSSD
 #===============================================================================
 
-- name: Check if SSSD is installed
+- name: Check if SSSD is installed (Debian)
   ansible.builtin.command: dpkg -l sssd
   register: sssd_installed
   changed_when: false
   failed_when: false
   check_mode: false
+  when: ansible_os_family == 'Debian'
   tags: [authentik, agent]
 
-- name: Generate backup timestamp
-  ansible.builtin.command: date +%Y%m%d_%H%M%S
-  register: backup_timestamp
+- name: Check if SSSD is installed (RedHat)
+  ansible.builtin.command: rpm -q sssd
+  register: sssd_installed
   changed_when: false
+  failed_when: false
   check_mode: false
-  when: sssd_installed.rc == 0
+  when: ansible_os_family == 'RedHat'
   tags: [authentik, agent]
 
 - name: Backup SSSD configuration before removal
   ansible.builtin.copy:
     src: /etc/sssd/sssd.conf
-    dest: "/etc/sssd/sssd.conf.backup-{{ backup_timestamp.stdout }}"
+    dest: "/etc/sssd/sssd.conf.backup-{{ ansible_date_time.iso8601_basic_short }}"
     remote_src: true
     mode: "0600"
   when: sssd_installed.rc == 0
@@ -59,7 +61,6 @@
       - libpam-sss
       - libnss-sss
       - libsss-sudo
-      - oddjob-mkhomedir
     state: absent
     purge: true
   when: ansible_os_family == 'Debian'
@@ -72,6 +73,7 @@
   loop:
     - /var/lib/sss
     - /etc/sssd
+  when: sssd_installed.rc | default(1) == 0
   tags: [authentik, agent]
 
 - name: Remove SSSD blocks from sshd_config
@@ -174,50 +176,43 @@
   check_mode: false
   tags: [authentik, agent]
 
-- name: Create temporary file for enrollment token
-  ansible.builtin.tempfile:
-    state: file
-    suffix: .token
-  register: token_file
-  when:
-    - not enrollment_check.stat.exists
-    - not ansible_check_mode
-  no_log: true
-  tags: [authentik, agent, enroll]
-
-- name: Write enrollment token to secure temporary file
-  ansible.builtin.copy:
-    content: "{{ vault_authentik_agent_enrollment_token }}"
-    dest: "{{ token_file.path }}"
-    mode: "0600"
-    owner: root
-    group: root
-  when:
-    - not enrollment_check.stat.exists
-    - not ansible_check_mode
-  no_log: true
-  tags: [authentik, agent, enroll]
-
 - name: Enroll device to Authentik
-  ansible.builtin.shell: |
-    cat "{{ token_file.path }}" | ak-sysd domains join "{{ authentik_domain_name }}" --authentik-url "{{ authentik_url }}"
   when:
     - not enrollment_check.stat.exists
     - not ansible_check_mode
-  no_log: true
-  register: enrollment_result
-  failed_when: enrollment_result.rc != 0
   tags: [authentik, agent, enroll]
+  block:
+    - name: Create temporary file for enrollment token
+      ansible.builtin.tempfile:
+        state: file
+        suffix: .token
+      register: token_file
+      no_log: true
 
-- name: Remove temporary enrollment token file
-  ansible.builtin.file:
-    path: "{{ token_file.path }}"
-    state: absent
-  when:
-    - not enrollment_check.stat.exists
-    - not ansible_check_mode
-  no_log: true
-  tags: [authentik, agent, enroll]
+    - name: Write enrollment token to secure temporary file
+      ansible.builtin.copy:
+        content: "{{ vault_authentik_agent_enrollment_token }}"
+        dest: "{{ token_file.path }}"
+        mode: "0600"
+        owner: root
+        group: root
+      no_log: true
+
+    - name: Run enrollment command
+      ansible.builtin.command:
+        cmd: ak-sysd domains join "{{ authentik_domain_name }}" --authentik-url "{{ authentik_url }}"
+        stdin: "{{ lookup('file', token_file.path) }}"
+      no_log: true
+      register: enrollment_result
+      failed_when: enrollment_result.rc != 0
+
+  always:
+    - name: Remove temporary enrollment token file
+      ansible.builtin.file:
+        path: "{{ token_file.path }}"
+        state: absent
+      when: token_file.path is defined
+      no_log: true
 
 - name: Enable and start Authentik system daemon
   ansible.builtin.systemd:
@@ -238,7 +233,7 @@
   ansible.builtin.lineinfile:
     path: /etc/nsswitch.conf
     regexp: "^{{ item.db }}:"
-    line: "{{ item.db }}:         {{ item.sources }}"
+    line: "{{ item.db }}:{{ ' ' * (16 - item.db | length) }}{{ item.sources }}"
     state: present
     backup: true
   loop:
@@ -275,7 +270,7 @@
   tags: [authentik, agent, ssh-keys]
 
 - name: Check if Authentik users exist in NSS
-  ansible.builtin.command: getent passwd {{ item.username }}
+  ansible.builtin.command: getent passwd "{{ item.username }}"
   loop: "{{ authentik_ssh_users | default([]) }}"
   when:
     - item.state == 'present'
@@ -284,6 +279,17 @@
   changed_when: false
   failed_when: false
   check_mode: false
+  tags: [authentik, agent, ssh-keys]
+
+- name: Fail on unexpected getent errors (rc other than 0 or 2)
+  ansible.builtin.fail:
+    msg: "getent passwd failed for {{ item.item.username }} with rc={{ item.rc }}"
+  loop: "{{ user_getent.results | default([]) }}"
+  when:
+    - item.rc is defined
+    - item.rc not in [0, 2]
+  loop_control:
+    label: "{{ item.item.username | default('skipped') }}"
   tags: [authentik, agent, ssh-keys]
 
 - name: Create .ssh directories for Authentik users
@@ -305,7 +311,7 @@
     user: "{{ item.item.username }}"
     key: "{{ item.item.ssh_keys | join('\n') }}"
     state: present
-    exclusive: true  # Remove any keys not in the list
+    exclusive: "{{ endpoint_ssh_key_exclusive }}"
     manage_dir: false  # We already created the directory
   loop: "{{ user_getent.results | default([]) }}"
   when:
@@ -351,7 +357,7 @@
     content: |
       # Sudo access for Authentik linux-users group
       # Managed by Ansible - do not edit manually
-      %linux-users ALL=(ALL:ALL) NOPASSWD: ALL
+      %linux-users ALL=(ALL:ALL) {{ 'NOPASSWD: ' if endpoint_sudo_nopasswd else '' }}ALL
   tags: [authentik, agent, sudo]
 
 - name: Ensure local fallback user has sudo access

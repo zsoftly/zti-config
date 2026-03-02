@@ -53,13 +53,13 @@
     - name: Use existing enrollment token from vault
       ansible.builtin.set_fact:
         fetched_enrollment_token: "{{ vault_authentik_agent_enrollment_token }}"
-      when: token_already_set
+      when: token_already_set | bool
       no_log: true
 
     - name: Display token source (vault)
       ansible.builtin.debug:
         msg: "Using enrollment token from inventory vault (no API fetch needed)"
-      when: token_already_set
+      when: token_already_set | bool
 
     - name: Validate API token for fetch
       ansible.builtin.assert:
@@ -70,7 +70,7 @@
           No enrollment token in vault and no API token available.
           Either set vault_authentik_agent_enrollment_token in inventory vault,
           or provide vault_authentik_token for API-based fetch.
-      when: not token_already_set
+      when: not token_already_set | bool
 
     - name: Get existing enrollment tokens from API
       ansible.builtin.uri:
@@ -81,7 +81,7 @@
         status_code: 200
       register: existing_tokens
       no_log: true
-      when: not token_already_set
+      when: not token_already_set | bool
 
     - name: Verify at least one enrollment token exists
       ansible.builtin.assert:
@@ -89,7 +89,7 @@
         fail_msg: >-
           No enrollment tokens found in authentik.
           Run the manage-endpoint-devices playbook in aws-infra first to create one.
-      when: not token_already_set
+      when: not token_already_set | bool
 
     - name: Retrieve enrollment token key from API
       ansible.builtin.uri:
@@ -100,18 +100,18 @@
         status_code: 200
       register: token_key_response
       no_log: true
-      when: not token_already_set
+      when: not token_already_set | bool
 
     - name: Store fetched enrollment token
       ansible.builtin.set_fact:
         fetched_enrollment_token: "{{ token_key_response.json.key }}"
-      when: not token_already_set
+      when: not token_already_set | bool
       no_log: true
 
     - name: Display token fetch status (API)
       ansible.builtin.debug:
         msg: "Enrollment token fetched from API (expires: {{ existing_tokens.json.results[0].expires | default('never') }})"
-      when: not token_already_set
+      when: not token_already_set | bool
 
 #===============================================================================
 # PLAY 2: Configure endpoints with agent + PAM exec

@@ -10,6 +10,8 @@
 authentik_flow_slug: "ssh-password-authentication"
 
 # Skip SSL verification (only for testing with self-signed certs)
+# WARNING: Enabling this exposes authentication traffic to MITM attacks.
+# Never enable in production environments.
 authentik_pam_exec_skip_ssl_verify: false
 
 # Minimum UID to authenticate via authentik (lower UIDs use local auth)
