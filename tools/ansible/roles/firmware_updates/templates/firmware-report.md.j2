@@ -11,13 +11,13 @@
 
 {% if firmware_updates_check.rc == 0 %}
 **Updates Available:** YES
-**Updates Applied:** {{ 'YES' if firmware_update_result.changed else 'FAILED' }}
+**Updates Applied:** {{ 'YES' if firmware_updates_result.changed else 'FAILED' }}
 
-{% if firmware_update_result.changed %}
+{% if firmware_updates_result.changed %}
 ### Updates Applied
 
 ```
-{{ firmware_update_result.stdout }}
+{{ firmware_updates_result.stdout }}
 ```
 
 ⚠️ **REBOOT REQUIRED** - Some firmware updates require a system reboot.
@@ -35,7 +35,7 @@
 ## Firmware Devices (Before Update)
 
 ```
-{{ firmware_before.stdout }}
+{{ firmware_updates_before.stdout }}
 ```
 
 ---
@@ -43,7 +43,7 @@
 ## Firmware Devices (After Update)
 
 ```
-{{ firmware_after.stdout }}
+{{ firmware_updates_after.stdout }}
 ```
 
 ---
@@ -51,7 +51,7 @@
 ## Metadata Refresh
 
 ```
-{{ metadata_refresh.stdout }}
+{{ firmware_updates_metadata_refresh.stdout }}
 ```
 
 ---
@@ -66,7 +66,7 @@
 
 ## Next Steps
 
-{% if firmware_update_result.changed %}
+{% if firmware_updates_result.changed %}
 1. **Reboot the system** to apply firmware changes
 2. After reboot, verify updates: `fwupdmgr get-devices`
 3. Update the [Firmware Update Log](../docs/FIRMWARE_UPDATE_LOG.md) with new versions
