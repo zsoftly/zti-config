@@ -156,6 +156,7 @@
     state: "{{ wazuh_agent_service_state }}"
     enabled: "{{ wazuh_agent_service_enabled }}"
     daemon_reload: true
+  register: wazuh_service_start
 
 - name: Verify connection
   ansible.builtin.wait_for:
@@ -164,7 +165,12 @@
     timeout: 30
   ignore_errors: true
   register: wazuh_connection
+  when: wazuh_service_start is changed
 
 - name: Status
   ansible.builtin.debug:
-    msg: "{{ 'Connected to manager' if wazuh_connection is succeeded else 'Connecting... check /var/ossec/logs/ossec.log' }}"
+    msg: >-
+      {{
+        'Connected to manager' if (wazuh_connection is skipped or wazuh_connection is succeeded)
+        else 'Connecting... check /var/ossec/logs/ossec.log'
+      }}
