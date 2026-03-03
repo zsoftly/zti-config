@@ -16,6 +16,7 @@ exclude_paths:
 # Skip specific rules
 skip_list:
   - role-name  # Allow flexible role naming
+  - var-naming[no-role-prefix]  # Roles use numeric prefixes (15_, 17_, 18_) for ordering
   - galaxy[no-changelog]  # Not publishing to Galaxy yet
   - fqcn[action-core]  # Allow short module names for readability
   - name[casing]  # Allow flexible task naming
@@ -23,6 +24,7 @@ skip_list:
 # Enable optional rules
 enable_list:
   - no-same-owner  # Security: avoid setting same owner
+  - yaml  # Enforce consistent YAML formatting
 
 # Warning vs Error
 warn_list:
