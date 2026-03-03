@@ -42,5 +42,8 @@
 
 - name: Fail2ban configured
   ansible.builtin.debug:
-    msg: "{{ inventory_hostname }}: [OK] Fail2ban - Ban: {{ fail2ban_bantime | default(3600) }}s, Max retries: {{ fail2ban_maxretry | default(5) }}"
+    msg: >-
+      {{ inventory_hostname }}: [OK] Fail2ban -
+      Ban: {{ fail2ban_bantime | default(3600) }}s,
+      Max retries: {{ fail2ban_maxretry | default(5) }}
   tags: [ssh, fail2ban]

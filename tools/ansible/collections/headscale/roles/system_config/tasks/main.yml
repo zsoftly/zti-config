@@ -22,7 +22,11 @@
 # Ref: https://tailscale.com/kb/1320/performance-best-practices
 
 - name: Get primary network interface
-  ansible.builtin.shell: ip -o route get 8.8.8.8 | cut -f 5 -d " "
+  ansible.builtin.shell:
+    cmd: |
+      set -o pipefail
+      ip -o route get 8.8.8.8 | cut -f 5 -d " "
+    executable: /bin/bash
   register: primary_netdev
   changed_when: false
 
@@ -140,7 +144,7 @@
     - ansible_os_family == 'Debian'
     - not ansible_check_mode
 
-- name: Persist iptables rules (RHEL-based)
+- name: Persist iptables rules (RHEL-based)  # noqa command-instead-of-shell
   ansible.builtin.shell:
     cmd: "{{ item }}"
   loop:

@@ -309,10 +309,12 @@
   failed_when: false
   when: not ansible_check_mode
 
-- name: Install Tailscale client (for subnet routing)
-  ansible.builtin.shell: |
-    curl -fsSL https://tailscale.com/install.sh | sh
-  args:
+- name: Install Tailscale client (for subnet routing)  # noqa risky-shell-pipe
+  ansible.builtin.shell:
+    cmd: |
+      set -o pipefail
+      curl -fsSL https://tailscale.com/install.sh | sh
+    executable: /bin/bash
     creates: /usr/bin/tailscale
   when:
     - not ansible_check_mode
@@ -374,6 +376,7 @@
       --hostname={{ headscale_router_hostname }}
       --advertise-tags=tag:subnet-router{{ ',tag:exit-node' if headscale_exit_node_enabled | default(false) else '' }}
       {{ '--advertise-exit-node' if headscale_exit_node_enabled | default(false) else '' }}
+  changed_when: true
   when:
     - not ansible_check_mode
     - tailscale_backend_state != 'Running'
@@ -509,8 +512,11 @@
 
 - name: List routes (verification)
   ansible.builtin.shell:
-    cmd: docker compose exec -T headscale headscale nodes list-routes | sed 's/\x1b\[[0-9;]*m//g'
+    cmd: |
+      set -o pipefail
+      docker compose exec -T headscale headscale nodes list-routes | sed 's/\x1b\[[0-9;]*m//g'
     chdir: /opt/headscale
+    executable: /bin/bash
   register: routes_list
   changed_when: false
   when: not ansible_check_mode

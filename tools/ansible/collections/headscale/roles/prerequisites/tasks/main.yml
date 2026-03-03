@@ -63,7 +63,7 @@
   when: ansible_os_family == 'Debian'
   tags: [upgrade, patches]
 
-- name: Upgrade all packages (RHEL/Fedora)
+- name: Upgrade all packages (RHEL/Fedora)  # noqa package-latest
   ansible.builtin.dnf:
     name: "*"
     state: latest
@@ -139,6 +139,7 @@
     - name: Run Tailscale install script
       ansible.builtin.command:
         cmd: /tmp/tailscale-install.sh
+      changed_when: true
       environment:
         TAILSCALE_SKIP_SETUP: "1"
 

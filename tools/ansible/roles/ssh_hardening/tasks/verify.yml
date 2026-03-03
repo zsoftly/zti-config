@@ -52,7 +52,9 @@
   ansible.builtin.debug:
     msg:
       - "[OK] SSH Hardening Complete - All Hosts"
-      - "Root login: {{ ssh_permit_root_login | default('no') }} | Password auth: {{ ssh_password_authentication | default('yes') }}"
+      - >-
+        Root login: {{ ssh_permit_root_login | default('no') }} |
+        Password auth: {{ ssh_password_authentication | default('yes') }}
       - "SSH port: {{ ssh_port | default(22) }}"
   run_once: true
   tags: [ssh, verify]

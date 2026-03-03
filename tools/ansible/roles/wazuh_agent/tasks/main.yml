@@ -20,14 +20,19 @@
       register: wazuh_gpg_key
 
     - name: Add GPG key
-      ansible.builtin.shell: |
-        curl -fsSL https://packages.wazuh.com/key/GPG-KEY-WAZUH | \
-        gpg --dearmor --batch --yes -o /usr/share/keyrings/wazuh-archive-keyring.gpg
+      ansible.builtin.shell:
+        cmd: |
+          set -o pipefail
+          curl -fsSL https://packages.wazuh.com/key/GPG-KEY-WAZUH | \
+          gpg --dearmor --batch --yes -o /usr/share/keyrings/wazuh-archive-keyring.gpg
+        executable: /bin/bash
+      changed_when: true
       when: not wazuh_gpg_key.stat.exists or wazuh_gpg_key.stat.size == 0
 
     - name: Add repository
       ansible.builtin.copy:
         dest: /etc/apt/sources.list.d/wazuh.list
+        # yamllint disable-line rule:line-length
         content: "deb [signed-by=/usr/share/keyrings/wazuh-archive-keyring.gpg] https://packages.wazuh.com/4.x/apt/ stable main\n"
         mode: "0644"
 

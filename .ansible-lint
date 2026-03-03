@@ -12,6 +12,12 @@ exclude_paths:
   - collections/ansible_collections/
   - galaxy_collections/
   - '**/*.md'
+  # Playbooks that reference vault-encrypted vars_files fail syntax-check
+  # in CI (no vault password), causing schema misdetection errors
+  - tools/ansible/collections/authentik/playbooks/configure-all.yml
+  - tools/ansible/collections/authentik/playbooks/configure-google-oauth.yml
+  - tools/ansible/collections/authentik/playbooks/configure.yml
+  - tools/ansible/collections/headscale/playbooks/headscale-install.yml
 
 # Skip specific rules
 skip_list:

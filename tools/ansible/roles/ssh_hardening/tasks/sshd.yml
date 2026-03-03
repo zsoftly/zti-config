@@ -87,7 +87,7 @@
   notify: restart sshd
   tags: [ssh, sshd]
 
-- name: Configure strong ciphers and MACs
+- name: Configure strong ciphers and MACs  # noqa yaml[line-length]
   ansible.builtin.blockinfile:
     path: /etc/ssh/sshd_config
     marker: "# {mark} ANSIBLE MANAGED - Strong Ciphers"

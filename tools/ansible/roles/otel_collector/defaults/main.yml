@@ -78,6 +78,7 @@ otel_keepalive_timeout: "20s"
 # - YAML string: \\b becomes literal \b in the config file
 # - Regex engine: \b is interpreted as word boundary
 # Do not change to single backslash or regex will break
+# yamllint disable-line rule:line-length
 otel_log_filter_pattern: '(?i)(\\berror\\b|\\bwarn(ing)?\\b|\\bfatal\\b|\\bpanic\\b|\\bcritical\\b|\\bfail(ed|ure)?\\b|\\bdenied\\b|\\brefused\\b)'
 
 # =============================================================================
