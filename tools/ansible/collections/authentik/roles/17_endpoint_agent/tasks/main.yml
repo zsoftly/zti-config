@@ -108,8 +108,13 @@
       when: not endpoint_agent_repo_check.stat.exists
 
     - name: Verify GPG key fingerprint
-      ansible.builtin.shell: |
-        gpg --import-options show-only --import --fingerprint /tmp/authentik-gpg-key.asc 2>&1 | grep -q '82EE AAD5 531A 856A 9C72  6132 2217 2AF2 AAE3 A237'
+      ansible.builtin.shell:
+        cmd: |
+          set -o pipefail
+          gpg --import-options show-only --import --fingerprint \
+            /tmp/authentik-gpg-key.asc 2>&1 \
+            | grep -q '82EE AAD5 531A 856A 9C72  6132 2217 2AF2 AAE3 A237'
+        executable: /bin/bash
       register: endpoint_agent_gpg_verify
       changed_when: false
       failed_when: endpoint_agent_gpg_verify.rc != 0
@@ -186,6 +191,7 @@
     - not ansible_check_mode
   no_log: true
   register: endpoint_agent_enrollment_result
+  changed_when: endpoint_agent_enrollment_result.rc == 0
   failed_when: endpoint_agent_enrollment_result.rc != 0
   tags: [authentik, agent, enroll]
 
@@ -282,7 +288,7 @@
   tags: [authentik, agent, ssh-keys]
 
 - name: Provision SSH authorized_keys for Authentik users
-  ansible.builtin.authorized_key:
+  ansible.posix.authorized_key:
     user: "{{ item.item.username }}"
     key: "{{ item.item.ssh_keys | join('\n') }}"
     state: present
