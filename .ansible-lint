@@ -23,7 +23,6 @@ skip_list:
 # Enable optional rules
 enable_list:
   - no-same-owner  # Security: avoid setting same owner
-  - yaml  # YAML syntax checking
 
 # Warning vs Error
 warn_list:
@@ -47,7 +46,7 @@ kinds:
 
 # Mock modules
 mock_modules:
-    - docker_compose
+  - docker_compose
 
 # Mock roles
 mock_roles:
