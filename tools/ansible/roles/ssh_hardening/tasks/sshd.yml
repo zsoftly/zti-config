@@ -87,22 +87,53 @@
   notify: restart sshd
   tags: [ssh, sshd]
 
-- name: Configure strong ciphers and MACs  # noqa yaml[line-length]
+- name: Remove legacy blockinfile cipher block
   ansible.builtin.blockinfile:
     path: /etc/ssh/sshd_config
     marker: "# {mark} ANSIBLE MANAGED - Strong Ciphers"
-    block: |
-      # Modern, secure ciphers only
-      Ciphers chacha20-poly1305@openssh.com,aes256-gcm@openssh.com,aes128-gcm@openssh.com,aes256-ctr,aes192-ctr,aes128-ctr
+    state: absent
+  notify: restart sshd
+  tags: [ssh, sshd]
 
-      # Secure key exchange algorithms
-      KexAlgorithms curve25519-sha256,curve25519-sha256@libssh.org,diffie-hellman-group16-sha512,diffie-hellman-group18-sha512
+- name: Configure strong ciphers
+  ansible.builtin.lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: "^Ciphers "
+    # yamllint disable-line rule:line-length
+    line: "Ciphers chacha20-poly1305@openssh.com,aes256-gcm@openssh.com,aes128-gcm@openssh.com,aes256-ctr,aes192-ctr,aes128-ctr"
+    state: present
+    validate: "/usr/sbin/sshd -t -f %s"
+  notify: restart sshd
+  tags: [ssh, sshd]
 
-      # Strong MACs only
-      MACs hmac-sha2-512-etm@openssh.com,hmac-sha2-256-etm@openssh.com,hmac-sha2-512,hmac-sha2-256
+- name: Configure secure key exchange algorithms
+  ansible.builtin.lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: "^KexAlgorithms "
+    # yamllint disable-line rule:line-length
+    line: "KexAlgorithms curve25519-sha256,curve25519-sha256@libssh.org,diffie-hellman-group16-sha512,diffie-hellman-group18-sha512"
+    state: present
+    validate: "/usr/sbin/sshd -t -f %s"
+  notify: restart sshd
+  tags: [ssh, sshd]
 
-      # Host key algorithms
-      HostKeyAlgorithms ssh-ed25519,ssh-ed25519-cert-v01@openssh.com,rsa-sha2-512,rsa-sha2-256
+- name: Configure strong MACs
+  ansible.builtin.lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: "^MACs "
+    # yamllint disable-line rule:line-length
+    line: "MACs hmac-sha2-512-etm@openssh.com,hmac-sha2-256-etm@openssh.com,hmac-sha2-512,hmac-sha2-256"
+    state: present
+    validate: "/usr/sbin/sshd -t -f %s"
+  notify: restart sshd
+  tags: [ssh, sshd]
+
+- name: Configure host key algorithms
+  ansible.builtin.lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: "^HostKeyAlgorithms "
+    # yamllint disable-line rule:line-length
+    line: "HostKeyAlgorithms ssh-ed25519,ssh-ed25519-cert-v01@openssh.com,rsa-sha2-512,rsa-sha2-256"
     state: present
     validate: "/usr/sbin/sshd -t -f %s"
   notify: restart sshd
