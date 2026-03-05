@@ -15,4 +15,4 @@ authentik_flow_slug: "ssh-password-authentication"
 authentik_pam_exec_skip_ssl_verify: false
 
 # Minimum UID to authenticate via authentik (lower UIDs use local auth)
-authentik_pam_exec_uid_threshold: 2000
+authentik_pam_exec_uid_threshold: 1001
