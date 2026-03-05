@@ -233,7 +233,7 @@ Check firmware versions match expected versions.
 
 ### 6. Update Firmware Log
 
-Update `docs/FIRMWARE_UPDATE_LOG.md` with:
+Update the firmware update log with:
 
 - Date of update
 - Operator name
@@ -344,5 +344,4 @@ not be available for that hardware.
 
 - **fwupd Documentation:** https://fwupd.org/
 - **LVFS (Firmware Repository):** https://fwupd.org/lvfs/
-- **Ubuntu fwupd Guide:** https://wiki.ubuntu.com/FirmwareUpdates
-- **Internal:** [Firmware Update Log](../../../docs/FIRMWARE_UPDATE_LOG.md)
+- **Ubuntu fwupd Guide:** https://ubuntu.com/core/docs/fwupd

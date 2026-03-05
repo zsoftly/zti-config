@@ -274,7 +274,7 @@ See [docs/TROUBLESHOOTING.md](../docs/TROUBLESHOOTING.md)
 
 ### Authentik
 
-See [docs/aws-sso-integration.md](../docs/aws-sso-integration.md)
+See the [Authentik collection](../tools/ansible/collections/authentik/README.md)
 
 ## Performance Issues
 
