@@ -115,6 +115,110 @@ otel_insecure: true
 
 ---
 
+### ssh_hardening
+
+**Purpose:** SSH security hardening with defense-in-depth controls
+
+**Location:** `tools/ansible/roles/ssh_hardening/`
+
+**Platforms:** Ubuntu, Debian
+
+**Key Features:**
+
+- UFW firewall (network-layer SSH access control)
+- SSH daemon hardening (strong crypto, session limits)
+- Fail2ban (brute force protection)
+- Login banners (legal deterrence)
+- Authentik agent integration (optional)
+
+**Usage:**
+
+```yaml
+- hosts: endpoints
+  roles:
+    - ssh_hardening
+```
+
+---
+
+## Collection Roles
+
+### Authentik SSH Endpoint Roles
+
+These roles live in `tools/ansible/collections/authentik/roles/` and configure
+Linux servers to authenticate SSH users against authentik. No enterprise license
+required.
+
+### 15_ssh_password_flow
+
+**Purpose:** Create SSH password authentication flow in authentik via API
+
+**Location:** `tools/ansible/collections/authentik/roles/15_ssh_password_flow/`
+
+**Key Variables:**
+
+```yaml
+authentik_url: "https://auth.example.com"
+authentik_flow_slug: "ssh-password-authentication"
+```
+
+**Runs on:** localhost (API calls only)
+
+---
+
+### 17_endpoint_agent
+
+**Purpose:** Install authentik agent, enroll device, configure NSS and sudo
+
+**Location:** `tools/ansible/collections/authentik/roles/17_endpoint_agent/`
+
+**Key Variables:**
+
+```yaml
+authentik_url: "https://auth.example.com"
+authentik_domain_name: "zsoftly-linux"
+vault_authentik_agent_enrollment_token: "..."  # from vault
+endpoint_sudo_nopasswd: false
+endpoint_ssh_key_exclusive: true
+```
+
+**Key Features:**
+
+- Removes SSSD if present (replaced by authentik agent)
+- Installs authentik agent packages from official repository
+- Enrolls device to authentik domain
+- Configures NSS (passwd, group, shadow) for authentik user resolution
+- Provisions SSH authorized_keys for authentik users
+- Configures sudo for `linux-users` group
+
+---
+
+### 18_endpoint_pam_exec
+
+**Purpose:** PAM exec authentication against authentik flow executor API
+
+**Location:** `tools/ansible/collections/authentik/roles/18_endpoint_pam_exec/`
+
+**Key Variables:**
+
+```yaml
+authentik_url: "https://auth.example.com"
+authentik_flow_slug: "ssh-password-authentication"
+authentik_pam_exec_uid_threshold: 1001       # UIDs below this use local auth
+authentik_pam_exec_skip_ssl_verify: false     # never enable in production
+```
+
+**Key Features:**
+
+- Deploys Python PAM script to `/opt/authentik-pam-auth.py`
+- Configures `common-auth` with pam_exec + pam_unix fallback
+- Removes conflicting `pam_authentik.so` entries (from libpam-authentik)
+- Enables PasswordAuthentication and KbdInteractiveAuthentication in sshd
+- Adds `pam_mkhomedir` for auto home directory creation
+- Validates sshd config and script permissions
+
+---
+
 ## Role Dependencies
 
 Visual dependency graph:
@@ -124,9 +228,13 @@ No dependencies:
   ├── wazuh_agent
   ├── system_updates
   ├── firmware_updates
-  └── otel_collector
+  ├── otel_collector
+  └── ssh_hardening
 
-These roles can be deployed independently in any order.
+Authentik SSH (ordered):
+  15_ssh_password_flow  (localhost, API only)
+  └── 17_endpoint_agent  (requires authentik + enrollment token)
+      └── 18_endpoint_pam_exec  (requires agent installed)
 ```
 
 ## Using Roles

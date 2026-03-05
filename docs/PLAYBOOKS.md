@@ -124,6 +124,47 @@ ansible-playbook tools/ansible/playbooks/05-identity.yml \
 
 ---
 
+### 06-ssh-hardening.yml
+
+**Purpose:** SSH hardening + Authentik PAM authentication for endpoints
+
+**Dependencies:**
+
+- 05-identity.yml (Authentik configured)
+- 04-vpn-mesh.yml (network connectivity)
+- `vault_authentik_agent_enrollment_token` in inventory vault
+
+**Hosts:** endpoints
+
+**Usage:**
+
+```bash
+# Full hardening + Authentik auth
+ansible-playbook tools/ansible/playbooks/06-ssh-hardening.yml \
+  -i inventory/hosts.yml --vault-password-file ~/.vault_pass
+
+# Only Authentik agent
+ansible-playbook tools/ansible/playbooks/06-ssh-hardening.yml \
+  -i inventory/hosts.yml --vault-password-file ~/.vault_pass --tags agent
+
+# Only PAM exec authentication
+ansible-playbook tools/ansible/playbooks/06-ssh-hardening.yml \
+  -i inventory/hosts.yml --vault-password-file ~/.vault_pass --tags pam-exec
+```
+
+**Tags:** `ssh`, `authentik`, `agent`, `pam-exec`, `banner`, `firewall`, `fail2ban`
+
+**When to run:**
+
+- New endpoint setup (after Authentik is configured)
+- Adding servers to Authentik SSH authentication
+- Updating SSH hardening policies
+
+**Note:** If the enrollment token is not in your inventory vault, use the collection
+playbook `configure-ssh-endpoints.yml` instead (see [Collections](COLLECTIONS.md)).
+
+---
+
 ### 99-full-stack.yml
 
 **Purpose:** Deploy complete infrastructure
