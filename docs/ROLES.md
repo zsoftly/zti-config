@@ -177,7 +177,7 @@ authentik_flow_slug: "ssh-password-authentication"
 ```yaml
 authentik_url: "https://auth.example.com"
 authentik_domain_name: "zsoftly-linux"
-vault_authentik_agent_enrollment_token: "..."  # from vault
+vault_authentik_agent_enrollment_token: "..." # from vault
 endpoint_sudo_nopasswd: false
 endpoint_ssh_key_exclusive: true
 ```
@@ -204,8 +204,8 @@ endpoint_ssh_key_exclusive: true
 ```yaml
 authentik_url: "https://auth.example.com"
 authentik_flow_slug: "ssh-password-authentication"
-authentik_pam_exec_uid_threshold: 1001       # UIDs below this use local auth
-authentik_pam_exec_skip_ssl_verify: false     # never enable in production
+authentik_pam_exec_uid_threshold: 1001 # UIDs below this use local auth
+authentik_pam_exec_skip_ssl_verify: false # never enable in production
 ```
 
 **Key Features:**
