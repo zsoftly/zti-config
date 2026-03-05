@@ -344,4 +344,3 @@ not be available for that hardware.
 
 - **fwupd Documentation:** https://fwupd.org/
 - **LVFS (Firmware Repository):** https://fwupd.org/lvfs/
-- **Ubuntu fwupd Guide:** https://ubuntu.com/core/docs/fwupd
