@@ -157,7 +157,7 @@
   ansible.builtin.apt:
     name: python3
     state: present
-  when: ansible_os_family == 'Debian'
+  when: ansible_facts['os_family'] == 'Debian'
   tags: [authentik, pam-exec]
 
 - name: Deploy Authentik PAM exec authentication script

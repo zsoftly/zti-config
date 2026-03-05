@@ -15,22 +15,15 @@
 # BACKUP & CLEANUP - Remove SSSD
 #===============================================================================
 
-- name: Check if SSSD is installed (Debian)
-  ansible.builtin.command: dpkg -l sssd
-  register: endpoint_agent_sssd_installed
-  changed_when: false
-  failed_when: false
+- name: Check if SSSD is installed
+  ansible.builtin.package_facts:
+    manager: auto
   check_mode: false
-  when: ansible_os_family == 'Debian'
   tags: [authentik, agent]
 
-- name: Check if SSSD is installed (RedHat)
-  ansible.builtin.command: rpm -q sssd
-  register: endpoint_agent_sssd_installed
-  changed_when: false
-  failed_when: false
-  check_mode: false
-  when: ansible_os_family == 'RedHat'
+- name: Set SSSD installed fact
+  ansible.builtin.set_fact:
+    endpoint_agent_sssd_present: "{{ 'sssd' in ansible_facts.packages }}"
   tags: [authentik, agent]
 
 - name: Backup SSSD configuration before removal
@@ -39,7 +32,7 @@
     dest: "/etc/sssd/sssd.conf.backup-{{ ansible_date_time.iso8601_basic_short }}"
     remote_src: true
     mode: "0600"
-  when: endpoint_agent_sssd_installed.rc == 0
+  when: endpoint_agent_sssd_present
   failed_when: false
   tags: [authentik, agent]
 
@@ -48,7 +41,7 @@
     name: sssd
     state: stopped
     enabled: false
-  when: endpoint_agent_sssd_installed.rc == 0
+  when: endpoint_agent_sssd_present
   failed_when: false
   tags: [authentik, agent]
 
@@ -63,7 +56,7 @@
       - libsss-sudo
     state: absent
     purge: true
-  when: ansible_os_family == 'Debian'
+  when: ansible_facts['os_family'] == 'Debian'
   tags: [authentik, agent]
 
 - name: Remove SSSD directories
@@ -90,7 +83,7 @@
 #===============================================================================
 
 - name: Install Authentik agent (Debian)
-  when: ansible_os_family == 'Debian'
+  when: ansible_facts['os_family'] == 'Debian'
   tags: [authentik, agent]
   block:
     - name: Check if Authentik repository already exists
