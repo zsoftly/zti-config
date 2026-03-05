@@ -173,6 +173,32 @@
 # CONFIGURE - PAM Stack (common-auth)
 #===============================================================================
 
+- name: Remove pam_authentik.so from sshd PAM config
+  ansible.builtin.lineinfile:
+    path: /etc/pam.d/sshd
+    regexp: "pam_authentik\\.so"
+    state: absent
+    backup: true
+  notify: restart sshd
+  tags: [authentik, pam-exec]
+
+- name: Remove pam_authentik pam-auth-update profile
+  ansible.builtin.file:
+    path: /usr/share/pam-configs/authentik
+    state: absent
+  register: endpoint_pam_exec_authentik_profile
+  tags: [authentik, pam-exec]
+
+- name: Remove pam_authentik.so from common-session files
+  ansible.builtin.lineinfile:
+    path: "{{ item }}"
+    regexp: "pam_authentik\\.so"
+    state: absent
+  loop:
+    - /etc/pam.d/common-session
+    - /etc/pam.d/common-session-noninteractive
+  tags: [authentik, pam-exec]
+
 - name: Deploy PAM configuration with backup restore on failure
   tags: [authentik, pam-exec]
   block:
