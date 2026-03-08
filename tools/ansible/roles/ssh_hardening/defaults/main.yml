@@ -10,7 +10,7 @@
 # Enable/disable banner display
 login_banner_enabled: true
 
-# Organization information (customize for your company)
+# Organization information (override in inventory group_vars)
 login_banner_company: "YOUR ORGANIZATION"
 login_banner_company_short: "YOUR ORG"
 login_banner_address: ""
