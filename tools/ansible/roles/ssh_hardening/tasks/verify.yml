@@ -34,7 +34,7 @@
 
 - name: Prepare UFW status string
   ansible.builtin.set_fact:
-    ufw_status_str: "{{ 'OK' if (ufw_check is defined and 'active' in ufw_check.stdout) else 'N/A' }}"
+    ufw_status_str: "{{ 'OK' if (ufw_check is defined and ufw_check.stdout is defined and 'active' in ufw_check.stdout) else 'N/A' }}"
   tags: [ssh, verify]
 
 - name: Prepare Fail2ban status string
