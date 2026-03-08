@@ -97,6 +97,7 @@
     regexp: "^Ciphers "
     # yamllint disable-line rule:line-length
     line: "Ciphers chacha20-poly1305@openssh.com,aes256-gcm@openssh.com,aes128-gcm@openssh.com,aes256-ctr,aes192-ctr,aes128-ctr"
+    insertbefore: "^Match "
     state: present
     validate: "/usr/sbin/sshd -t -f %s"
   notify: restart sshd
@@ -108,6 +109,7 @@
     regexp: "^KexAlgorithms "
     # yamllint disable-line rule:line-length
     line: "KexAlgorithms curve25519-sha256,curve25519-sha256@libssh.org,diffie-hellman-group16-sha512,diffie-hellman-group18-sha512"
+    insertbefore: "^Match "
     state: present
     validate: "/usr/sbin/sshd -t -f %s"
   notify: restart sshd
@@ -119,6 +121,7 @@
     regexp: "^MACs "
     # yamllint disable-line rule:line-length
     line: "MACs hmac-sha2-512-etm@openssh.com,hmac-sha2-256-etm@openssh.com,hmac-sha2-512,hmac-sha2-256"
+    insertbefore: "^Match "
     state: present
     validate: "/usr/sbin/sshd -t -f %s"
   notify: restart sshd
@@ -130,6 +133,7 @@
     regexp: "^HostKeyAlgorithms "
     # yamllint disable-line rule:line-length
     line: "HostKeyAlgorithms ssh-ed25519,ssh-ed25519-cert-v01@openssh.com,rsa-sha2-512,rsa-sha2-256"
+    insertbefore: "^Match "
     state: present
     validate: "/usr/sbin/sshd -t -f %s"
   notify: restart sshd
