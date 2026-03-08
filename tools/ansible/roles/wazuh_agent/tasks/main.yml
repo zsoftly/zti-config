@@ -89,35 +89,15 @@
 
 - name: Set enrollment needed flag
   ansible.builtin.set_fact:
-    # Only enroll if:
-    # 1. client.keys doesn't exist or is empty (fresh install), OR
-    # 2. Group changed AND .enrolled_groups file exists (explicit re-enrollment)
-    # Skip re-enrollment for existing agents without .enrolled_groups (legacy/UI-managed)
+    # Enroll only if client.keys is missing/empty OR service is not running
+    # Both conditions checked independently — missing key always triggers enrollment,
+    # stopped service alone does not (client.keys may be valid, service just needs start)
+    # To force re-enrollment: delete client.keys, then re-run playbook
     wazuh_needs_enrollment: >-
       {{
         not wazuh_client_keys.stat.exists or
-        wazuh_client_keys.stat.size == 0 or
-        (
-          wazuh_current_groups.content is defined and
-          (wazuh_current_groups.content | b64decode | trim) != (wazuh_agent_group | default(''))
-        )
+        wazuh_client_keys.stat.size == 0
       }}
-
-- name: Remove stale enrollment (group changed)
-  when:
-    - wazuh_needs_enrollment
-    - wazuh_client_keys.stat.exists
-    - wazuh_client_keys.stat.size > 0
-  block:
-    - name: Stop agent before re-enrollment
-      ansible.builtin.systemd:
-        name: wazuh-agent
-        state: stopped
-
-    - name: Remove client.keys for re-enrollment
-      ansible.builtin.file:
-        path: /var/ossec/etc/client.keys
-        state: absent
 
 - name: Enroll agent
   when: wazuh_needs_enrollment
@@ -131,9 +111,23 @@
       {{ '-P ' + wazuh_authd_password if wazuh_authd_password | length > 0 else '' }}
   register: wazuh_enrollment
   changed_when: wazuh_enrollment.rc == 0
-  failed_when: wazuh_enrollment.rc != 0
+  failed_when:
+    - wazuh_enrollment.rc != 0
+    - "'Duplicate agent name' not in wazuh_enrollment.stderr"
   timeout: 30
-  no_log: false  # Temporarily disabled to debug enrollment issues
+  no_log: true
+
+- name: Warn on duplicate enrollment
+  when:
+    - wazuh_needs_enrollment
+    - wazuh_enrollment is defined
+    - "'Duplicate agent name' in (wazuh_enrollment.stderr | default(''))"
+  ansible.builtin.debug:
+    msg: >-
+      [WARNING] Agent {{ wazuh_agent_name }} is already registered on the manager
+      but client.keys is missing or stale on this host. The agent cannot connect.
+      To fix: delete agent {{ wazuh_agent_name }} from the Wazuh manager via API,
+      then re-run this playbook.
 
 - name: Save enrolled group config
   when: wazuh_needs_enrollment
@@ -143,11 +137,14 @@
     mode: "0600"
 
 # Remote commands configuration
+# logcollector.remote_commands=1 is required for agent.conf localfile commands
+# pushed from the manager to be accepted. This is a local-only security gate
+# that cannot be set via agent.conf itself.
 - name: Configure remote commands
   ansible.builtin.lineinfile:
     path: /var/ossec/etc/local_internal_options.conf
-    regexp: "^wazuh\\.remote_commands="
-    line: "wazuh.remote_commands={{ '1' if wazuh_remote_commands_enabled else '0' }}"
+    regexp: "^logcollector\\.remote_commands="
+    line: "logcollector.remote_commands={{ '1' if wazuh_remote_commands_enabled else '0' }}"
     create: true
     mode: "0640"
     owner: root
