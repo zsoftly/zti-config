@@ -72,10 +72,6 @@
     - regexp: '^#?SyslogFacility'
       line: "SyslogFacility AUTH"
 
-    # Protocol and ciphers (modern only)
-    - regexp: '^#?Protocol'
-      line: "Protocol 2"
-
     # Strict mode
     - regexp: '^#?StrictModes'
       line: "StrictModes yes"
