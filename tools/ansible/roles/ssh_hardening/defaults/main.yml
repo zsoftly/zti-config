@@ -5,12 +5,8 @@
 # ============================================================================
 # Banner Configuration
 # ============================================================================
-# Displays legal/warning banners before and after SSH login
 
-# Enable/disable banner display
 login_banner_enabled: true
-
-# Organization information (override in inventory group_vars)
 login_banner_company: "YOUR ORGANIZATION"
 login_banner_company_short: "YOUR ORG"
 login_banner_address: ""
@@ -20,74 +16,76 @@ login_banner_security_contact: "security@example.com"
 # ============================================================================
 # SSH Daemon Settings
 # ============================================================================
-# SSH server configuration - follows security hardening best practices
 
-# SSH listening port
 ssh_port: 22
+ssh_address_family: "any"
 
-# Root login (recommended: no)
-ssh_permit_root_login: "prohibit-password"
+# Root login - secure default: no
+ssh_permit_root_login: "no"
 
-# Authentication methods
-# Note: Allow password auth for initial setup, disable after key-based auth is configured
-ssh_password_authentication: "yes"
+# Authentication - secure defaults: keys only, no passwords
+ssh_password_authentication: "no"
 ssh_pubkey_authentication: "yes"
+ssh_challenge_response_authentication: "no"
+ssh_use_pam: "yes"
+ssh_permit_empty_passwords: "no"
 
 # Brute force protection
 ssh_max_auth_tries: 3
 ssh_login_grace_time: 30
+ssh_max_sessions: 10
+ssh_max_startups: "10:30:60"
 
 # Session management
 ssh_client_alive_interval: 300
 ssh_client_alive_count_max: 2
 
+# Disable insecure features
+ssh_x11_forwarding: "no"
+ssh_allow_tcp_forwarding: "no"
+ssh_allow_agent_forwarding: "no"
+ssh_permit_tunnel: "no"
+ssh_gateway_ports: "no"
+ssh_permit_user_environment: "no"
+
+# Cryptography - modern algorithms only
+ssh_ciphers: "chacha20-poly1305@openssh.com,aes256-gcm@openssh.com,aes128-gcm@openssh.com,aes256-ctr,aes192-ctr,aes128-ctr"
+ssh_kex_algorithms: "curve25519-sha256,curve25519-sha256@libssh.org,diffie-hellman-group16-sha512,diffie-hellman-group18-sha512"
+ssh_macs: "hmac-sha2-512-etm@openssh.com,hmac-sha2-256-etm@openssh.com,hmac-sha2-512,hmac-sha2-256"
+ssh_host_key_algorithms: "ssh-ed25519,ssh-ed25519-cert-v01@openssh.com,rsa-sha2-512,rsa-sha2-256"
+
+# Logging
+ssh_log_level: "VERBOSE"
+ssh_syslog_facility: "AUTH"
+
+# Misc
+ssh_strict_modes: "yes"
+ssh_use_dns: "no"
+ssh_print_last_log: "yes"
+
+# SFTP subsystem
+ssh_sftp_enabled: true
+ssh_sftp_subsystem: "/usr/lib/openssh/sftp-server"
+
 # ============================================================================
 # Firewall Configuration (UFW)
 # ============================================================================
-# Network-level access control
 
-# Enable/disable UFW firewall
 firewall_enabled: true
-
-# Default policies
 firewall_default_incoming: "deny"
 firewall_default_outgoing: "allow"
 
-# SSH access rules (customize for your network)
-# Set these variables in your inventory/playbook to configure SSH access:
-# - ssh_allowed_sources: List of IP addresses/subnets to allow SSH from
-# - ssh_allowed_interfaces: List of network interfaces to allow SSH on
-#
-# Example:
-#   ssh_allowed_sources:
-#     - "192.168.1.0/24"
-#     - "10.0.0.0/8"
-#   ssh_allowed_interfaces:
-#     - "eth0"
-#     - "tailscale0"
+# SSH access rules - set in inventory/playbook:
+# ssh_allowed_sources: ["192.168.1.0/24"]
+# ssh_allowed_interfaces: ["eth0"]
 
 # ============================================================================
 # Fail2ban Configuration
 # ============================================================================
-# Intrusion prevention - automatically bans IPs with too many failed login attempts
 
-# Enable/disable fail2ban
 fail2ban_enabled: true
-
-# Ban duration in seconds (default: 1 hour)
 fail2ban_bantime: 3600
-
-# Time window for counting failures (default: 10 minutes)
 fail2ban_findtime: 600
-
-# Number of failures before ban
 fail2ban_maxretry: 5
-
-# Whitelist trusted networks from fail2ban bans
-# Note: In production, keep this false for security compliance
-# Set to true in lab/dev environments to prevent accidental lockouts
 fail2ban_whitelist_lan: false
-
-# Trusted subnets to whitelist (only used if fail2ban_whitelist_lan is true)
-# Example: fail2ban_trusted_subnets: ["192.168.1.0/24", "10.0.0.0/8"]
 fail2ban_trusted_subnets: []

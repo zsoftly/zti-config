@@ -40,12 +40,3 @@
   failed_when: false
   tags: [ssh, banner]
 
-- name: Enable banner in SSH config
-  ansible.builtin.lineinfile:
-    path: /etc/ssh/sshd_config
-    regexp: '^#?Banner'
-    line: 'Banner /etc/issue.net'
-    state: present
-    backup: true
-  notify: restart sshd
-  tags: [ssh, banner]

@@ -11,131 +11,15 @@
     mode: "0600"
   tags: [ssh, sshd]
 
-- name: Configure SSH daemon security settings
-  ansible.builtin.lineinfile:
-    path: /etc/ssh/sshd_config
-    regexp: "{{ item.regexp }}"
-    line: "{{ item.line }}"
-    state: present
+- name: Deploy hardened sshd_config
+  ansible.builtin.template:
+    src: sshd_config.j2
+    dest: /etc/ssh/sshd_config
+    owner: root
+    group: root
+    mode: "0600"
+    validate: "/usr/sbin/sshd -t -f %s"
     backup: true
-    validate: "/usr/sbin/sshd -t -f %s"
-  loop:
-    # Port configuration
-    - regexp: '^#?Port '
-      line: "Port {{ ssh_port | default(22) }}"
-
-    # Authentication settings
-    - regexp: '^#?PermitRootLogin'
-      line: "PermitRootLogin {{ ssh_permit_root_login | default('no') }}"
-    - regexp: '^#?PasswordAuthentication'
-      line: "PasswordAuthentication {{ ssh_password_authentication | default('no') }}"
-    - regexp: '^#?PubkeyAuthentication'
-      line: "PubkeyAuthentication {{ ssh_pubkey_authentication | default('yes') }}"
-    - regexp: '^#?ChallengeResponseAuthentication'
-      line: "ChallengeResponseAuthentication no"
-    - regexp: '^#?UsePAM'
-      line: "UsePAM yes"
-    - regexp: '^#?PermitEmptyPasswords'
-      line: "PermitEmptyPasswords no"
-
-    # Brute force protection
-    - regexp: '^#?MaxAuthTries'
-      line: "MaxAuthTries {{ ssh_max_auth_tries | default(3) }}"
-    - regexp: '^#?LoginGraceTime'
-      line: "LoginGraceTime {{ ssh_login_grace_time | default(30) }}"
-    - regexp: '^#?MaxSessions'
-      line: "MaxSessions 10"
-    - regexp: '^#?MaxStartups'
-      line: "MaxStartups 10:30:60"
-
-    # Session management
-    - regexp: '^#?ClientAliveInterval'
-      line: "ClientAliveInterval {{ ssh_client_alive_interval | default(300) }}"
-    - regexp: '^#?ClientAliveCountMax'
-      line: "ClientAliveCountMax {{ ssh_client_alive_count_max | default(2) }}"
-
-    # Disable insecure features
-    - regexp: '^#?X11Forwarding'
-      line: "X11Forwarding no"
-    - regexp: '^#?AllowTcpForwarding'
-      line: "AllowTcpForwarding no"
-    - regexp: '^#?AllowAgentForwarding'
-      line: "AllowAgentForwarding no"
-    - regexp: '^#?PermitTunnel'
-      line: "PermitTunnel no"
-    - regexp: '^#?GatewayPorts'
-      line: "GatewayPorts no"
-
-    # Logging
-    - regexp: '^#?LogLevel'
-      line: "LogLevel VERBOSE"
-    - regexp: '^#?SyslogFacility'
-      line: "SyslogFacility AUTH"
-
-    # Strict mode
-    - regexp: '^#?StrictModes'
-      line: "StrictModes yes"
-
-    # DNS (disable for faster connections)
-    - regexp: '^#?UseDNS'
-      line: "UseDNS no"
-
-  notify: restart sshd
-  tags: [ssh, sshd]
-
-- name: Remove legacy blockinfile cipher block
-  ansible.builtin.blockinfile:
-    path: /etc/ssh/sshd_config
-    marker: "# {mark} ANSIBLE MANAGED - Strong Ciphers"
-    state: absent
-  notify: restart sshd
-  tags: [ssh, sshd]
-
-- name: Configure strong ciphers
-  ansible.builtin.lineinfile:
-    path: /etc/ssh/sshd_config
-    regexp: "^Ciphers "
-    # yamllint disable-line rule:line-length
-    line: "Ciphers chacha20-poly1305@openssh.com,aes256-gcm@openssh.com,aes128-gcm@openssh.com,aes256-ctr,aes192-ctr,aes128-ctr"
-    insertbefore: "^Match "
-    state: present
-    validate: "/usr/sbin/sshd -t -f %s"
-  notify: restart sshd
-  tags: [ssh, sshd]
-
-- name: Configure secure key exchange algorithms
-  ansible.builtin.lineinfile:
-    path: /etc/ssh/sshd_config
-    regexp: "^KexAlgorithms "
-    # yamllint disable-line rule:line-length
-    line: "KexAlgorithms curve25519-sha256,curve25519-sha256@libssh.org,diffie-hellman-group16-sha512,diffie-hellman-group18-sha512"
-    insertbefore: "^Match "
-    state: present
-    validate: "/usr/sbin/sshd -t -f %s"
-  notify: restart sshd
-  tags: [ssh, sshd]
-
-- name: Configure strong MACs
-  ansible.builtin.lineinfile:
-    path: /etc/ssh/sshd_config
-    regexp: "^MACs "
-    # yamllint disable-line rule:line-length
-    line: "MACs hmac-sha2-512-etm@openssh.com,hmac-sha2-256-etm@openssh.com,hmac-sha2-512,hmac-sha2-256"
-    insertbefore: "^Match "
-    state: present
-    validate: "/usr/sbin/sshd -t -f %s"
-  notify: restart sshd
-  tags: [ssh, sshd]
-
-- name: Configure host key algorithms
-  ansible.builtin.lineinfile:
-    path: /etc/ssh/sshd_config
-    regexp: "^HostKeyAlgorithms "
-    # yamllint disable-line rule:line-length
-    line: "HostKeyAlgorithms ssh-ed25519,ssh-ed25519-cert-v01@openssh.com,rsa-sha2-512,rsa-sha2-256"
-    insertbefore: "^Match "
-    state: present
-    validate: "/usr/sbin/sshd -t -f %s"
   notify: restart sshd
   tags: [ssh, sshd]
 
@@ -144,14 +28,6 @@
     path: /etc/ssh
     state: directory
     mode: "0755"
-    owner: root
-    group: root
-  tags: [ssh, sshd]
-
-- name: Set correct permissions on sshd_config
-  ansible.builtin.file:
-    path: /etc/ssh/sshd_config
-    mode: "0600"
     owner: root
     group: root
   tags: [ssh, sshd]

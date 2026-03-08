@@ -1,0 +1,65 @@
+# Managed by Ansible - ssh_hardening role
+# Do not edit manually
+
+# Network
+Port {{ ssh_port }}
+AddressFamily {{ ssh_address_family }}
+ListenAddress 0.0.0.0
+
+# Host keys
+HostKey /etc/ssh/ssh_host_rsa_key
+HostKey /etc/ssh/ssh_host_ecdsa_key
+HostKey /etc/ssh/ssh_host_ed25519_key
+
+# Authentication
+PermitRootLogin {{ ssh_permit_root_login }}
+PasswordAuthentication {{ ssh_password_authentication }}
+PubkeyAuthentication {{ ssh_pubkey_authentication }}
+ChallengeResponseAuthentication {{ ssh_challenge_response_authentication }}
+UsePAM {{ ssh_use_pam }}
+PermitEmptyPasswords {{ ssh_permit_empty_passwords }}
+AuthorizedKeysFile .ssh/authorized_keys
+
+# Brute force protection
+MaxAuthTries {{ ssh_max_auth_tries }}
+LoginGraceTime {{ ssh_login_grace_time }}
+MaxSessions {{ ssh_max_sessions }}
+MaxStartups {{ ssh_max_startups }}
+
+# Session management
+ClientAliveInterval {{ ssh_client_alive_interval }}
+ClientAliveCountMax {{ ssh_client_alive_count_max }}
+
+# Disable insecure features
+X11Forwarding {{ ssh_x11_forwarding }}
+AllowTcpForwarding {{ ssh_allow_tcp_forwarding }}
+AllowAgentForwarding {{ ssh_allow_agent_forwarding }}
+PermitTunnel {{ ssh_permit_tunnel }}
+GatewayPorts {{ ssh_gateway_ports }}
+PermitUserEnvironment {{ ssh_permit_user_environment }}
+
+# Cryptography - modern only
+Ciphers {{ ssh_ciphers }}
+KexAlgorithms {{ ssh_kex_algorithms }}
+MACs {{ ssh_macs }}
+HostKeyAlgorithms {{ ssh_host_key_algorithms }}
+
+# Logging
+LogLevel {{ ssh_log_level }}
+SyslogFacility {{ ssh_syslog_facility }}
+
+# Misc
+StrictModes {{ ssh_strict_modes }}
+UseDNS {{ ssh_use_dns }}
+PrintLastLog {{ ssh_print_last_log }}
+PrintMotd no
+
+{% if ssh_sftp_enabled %}
+# SFTP subsystem
+Subsystem sftp {{ ssh_sftp_subsystem }}
+{% endif %}
+
+{% if login_banner_enabled %}
+# Login banner
+Banner /etc/issue.net
+{% endif %}
