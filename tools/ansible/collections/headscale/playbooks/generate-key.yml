@@ -80,21 +80,31 @@
         tags_string: "{{ key_tags | map('regex_replace', '^', 'tag:') | join(',') }}"
 
     - name: Check if user exists
-      ansible.builtin.shell: |
-        cd {{ compose_dir }} && docker compose exec -T headscale headscale users list -o json | jq -r '.[].name'
+      ansible.builtin.shell:
+        cmd: |
+          set -o pipefail
+          docker compose exec -T headscale headscale users list -o json | jq -r '.[].name'
+        chdir: "{{ compose_dir }}"
+        executable: /bin/bash
       register: existing_users
       changed_when: false
 
     - name: Create user namespace if not exists
-      ansible.builtin.shell: |
-        cd {{ compose_dir }} && docker compose exec -T headscale headscale users create "{{ username }}"
+      ansible.builtin.command:
+        cmd: docker compose exec -T headscale headscale users create "{{ username }}"
+        chdir: "{{ compose_dir }}"
       when: username not in existing_users.stdout_lines
+      changed_when: true
       register: user_created
 
     - name: Get user ID
-      ansible.builtin.shell: |
-        cd {{ compose_dir }} && docker compose exec -T headscale headscale users list -o json | \
-          jq -r '.[] | select(.name == "{{ username }}") | .id'
+      ansible.builtin.shell:
+        cmd: |
+          set -o pipefail
+          docker compose exec -T headscale headscale users list -o json | \
+            jq -r '.[] | select(.name == "{{ username }}") | .id'
+        chdir: "{{ compose_dir }}"
+        executable: /bin/bash
       register: user_id_result
       changed_when: false
 
@@ -105,13 +115,17 @@
         fail_msg: "Failed to get user ID for {{ username }}"
 
     - name: Generate pre-auth key
-      ansible.builtin.shell: |
-        cd {{ compose_dir }} && docker compose exec -T headscale headscale preauthkeys create \
-          -u "{{ user_id_result.stdout }}" \
-          --tags "{{ tags_string }}" \
-          -e "{{ expiry }}" \
-          {{ '--reusable' if reusable | bool else '' }} \
-          -o json
+      ansible.builtin.shell:
+        cmd: |
+          docker compose exec -T headscale headscale preauthkeys create \
+            -u "{{ user_id_result.stdout }}" \
+            --tags "{{ tags_string }}" \
+            -e "{{ expiry }}" \
+            {{ '--reusable' if reusable | bool else '' }} \
+            -o json
+        chdir: "{{ compose_dir }}"
+        executable: /bin/bash
+      changed_when: true
       register: key_result
 
     - name: Parse key from JSON output

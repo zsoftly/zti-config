@@ -12,10 +12,17 @@ exclude_paths:
   - collections/ansible_collections/
   - galaxy_collections/
   - '**/*.md'
+  # Playbooks that reference vault-encrypted vars_files fail syntax-check
+  # in CI (no vault password), causing schema misdetection errors
+  - tools/ansible/collections/authentik/playbooks/configure-all.yml
+  - tools/ansible/collections/authentik/playbooks/configure-google-oauth.yml
+  - tools/ansible/collections/authentik/playbooks/configure.yml
+  - tools/ansible/collections/headscale/playbooks/headscale-install.yml
 
 # Skip specific rules
 skip_list:
   - role-name  # Allow flexible role naming
+  - var-naming[no-role-prefix]  # Roles use numeric prefixes (15_, 17_, 18_) for ordering
   - galaxy[no-changelog]  # Not publishing to Galaxy yet
   - fqcn[action-core]  # Allow short module names for readability
   - name[casing]  # Allow flexible task naming
@@ -23,7 +30,7 @@ skip_list:
 # Enable optional rules
 enable_list:
   - no-same-owner  # Security: avoid setting same owner
-  - yaml  # YAML syntax checking
+  - yaml  # Enforce consistent YAML formatting
 
 # Warning vs Error
 warn_list:
@@ -47,7 +54,6 @@ kinds:
 
 # Mock modules
 mock_modules:
-  - authentik.*
   - docker_compose
 
 # Mock roles

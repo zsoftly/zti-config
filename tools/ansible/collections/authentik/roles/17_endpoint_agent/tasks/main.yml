@@ -1,0 +1,380 @@
+---
+# 17_endpoint_agent - Main Task File
+# Installs authentik agent, enrolls device, configures NSS, sudo, and SSH keys.
+# Official docs: https://docs.goauthentik.io/endpoint-devices/authentik-agent/agent-deployment/linux/
+
+#===============================================================================
+# GATHER FACTS - Required when running with --tags
+#===============================================================================
+
+- name: Gather facts for Authentik agent tasks
+  ansible.builtin.setup:
+  tags: [authentik, agent]
+
+#===============================================================================
+# BACKUP & CLEANUP - Remove SSSD
+#===============================================================================
+
+- name: Check if SSSD is installed
+  ansible.builtin.package_facts:
+    manager: auto
+  check_mode: false
+  tags: [authentik, agent]
+
+- name: Set SSSD installed fact
+  ansible.builtin.set_fact:
+    endpoint_agent_sssd_present: "{{ 'sssd' in ansible_facts.packages }}"
+  tags: [authentik, agent]
+
+- name: Backup SSSD configuration before removal
+  ansible.builtin.copy:
+    src: /etc/sssd/sssd.conf
+    dest: "/etc/sssd/sssd.conf.backup-{{ ansible_date_time.iso8601_basic_short }}"
+    remote_src: true
+    mode: "0600"
+  when: endpoint_agent_sssd_present
+  failed_when: false
+  tags: [authentik, agent]
+
+- name: Stop SSSD service
+  ansible.builtin.systemd:
+    name: sssd
+    state: stopped
+    enabled: false
+  when: endpoint_agent_sssd_present
+  failed_when: false
+  tags: [authentik, agent]
+
+- name: Purge SSSD packages
+  ansible.builtin.apt:
+    name:
+      - sssd
+      - sssd-ldap
+      - sssd-tools
+      - libpam-sss
+      - libnss-sss
+      - libsss-sudo
+    state: absent
+    purge: true
+  when: ansible_facts['os_family'] == 'Debian'
+  tags: [authentik, agent]
+
+- name: Remove SSSD directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /var/lib/sss
+    - /etc/sssd
+  when: endpoint_agent_sssd_installed.rc | default(1) == 0
+  tags: [authentik, agent]
+
+- name: Remove SSSD blocks from sshd_config
+  ansible.builtin.blockinfile:
+    path: /etc/ssh/sshd_config
+    marker: "# {mark} ANSIBLE MANAGED - SSSD Authorized Keys"
+    state: absent
+  notify: restart sshd
+  tags: [authentik, agent]
+
+#===============================================================================
+# INSTALL - Authentik Agent from Official Repository
+# Ref: https://docs.goauthentik.io/endpoint-devices/authentik-agent/agent-deployment/linux/
+#===============================================================================
+
+- name: Install Authentik agent (Debian)
+  when: ansible_facts['os_family'] == 'Debian'
+  tags: [authentik, agent]
+  block:
+    - name: Check if Authentik repository already exists
+      ansible.builtin.stat:
+        path: /etc/apt/sources.list.d/authentik.list
+      register: endpoint_agent_repo_check
+      check_mode: false
+
+    - name: Download Authentik GPG key
+      ansible.builtin.get_url:
+        url: https://pkg.goauthentik.io/keys/gpg-key.asc
+        dest: /tmp/authentik-gpg-key.asc
+        mode: "0644"
+      check_mode: false
+      when: not endpoint_agent_repo_check.stat.exists
+
+    - name: Verify GPG key fingerprint
+      ansible.builtin.shell:
+        cmd: |
+          set -o pipefail
+          gpg --import-options show-only --import --fingerprint \
+            /tmp/authentik-gpg-key.asc 2>&1 \
+            | grep -q '82EE AAD5 531A 856A 9C72  6132 2217 2AF2 AAE3 A237'
+        executable: /bin/bash
+      register: endpoint_agent_gpg_verify
+      changed_when: false
+      failed_when: endpoint_agent_gpg_verify.rc != 0
+      check_mode: false
+      when: not endpoint_agent_repo_check.stat.exists
+
+    - name: Install Authentik GPG key
+      ansible.builtin.command:
+        cmd: gpg --dearmor --batch --yes -o /usr/share/keyrings/authentik-keyring.gpg /tmp/authentik-gpg-key.asc
+      args:
+        creates: /usr/share/keyrings/authentik-keyring.gpg
+      when: not endpoint_agent_repo_check.stat.exists
+
+    - name: Add Authentik APT repository
+      ansible.builtin.copy:
+        dest: /etc/apt/sources.list.d/authentik.list
+        mode: "0644"
+        content: |
+          deb [signed-by=/usr/share/keyrings/authentik-keyring.gpg] https://pkg.goauthentik.io stable main
+      register: endpoint_agent_repo_added
+
+    - name: Update APT cache
+      ansible.builtin.apt:
+        update_cache: true
+      when: endpoint_agent_repo_added.changed
+
+    - name: Install Authentik agent packages
+      ansible.builtin.apt:
+        name:
+          - authentik-cli
+          - authentik-agent
+          - authentik-sysd
+          - libpam-authentik
+          - libnss-authentik
+        state: present
+      when: not ansible_check_mode or endpoint_agent_repo_check.stat.exists
+
+    - name: Clean up temporary GPG key file
+      ansible.builtin.file:
+        path: /tmp/authentik-gpg-key.asc
+        state: absent
+      when: not endpoint_agent_repo_check.stat.exists
+
+- name: Reload systemd daemon to recognize new services
+  ansible.builtin.systemd:
+    daemon_reload: true
+  tags: [authentik, agent]
+
+#===============================================================================
+# ENROLLMENT - Join device to Authentik
+# Ref: https://docs.goauthentik.io/endpoint-devices/authentik-agent/agent-deployment/linux/
+#===============================================================================
+
+- name: Check if device is already enrolled
+  ansible.builtin.stat:
+    path: "/etc/authentik/domains/{{ authentik_domain_name }}.json"
+  register: endpoint_agent_enrollment_check
+  check_mode: false
+  tags: [authentik, agent]
+
+- name: Enroll device to Authentik
+  ansible.builtin.command:
+    argv:
+      - ak-sysd
+      - domains
+      - join
+      - "{{ authentik_domain_name }}"
+      - --authentik-url
+      - "{{ authentik_url }}"
+    stdin: "{{ vault_authentik_agent_enrollment_token }}"
+    stdin_add_newline: false
+  when:
+    - not endpoint_agent_enrollment_check.stat.exists
+    - not ansible_check_mode
+  no_log: true
+  register: endpoint_agent_enrollment_result
+  changed_when: endpoint_agent_enrollment_result.rc == 0
+  failed_when: endpoint_agent_enrollment_result.rc != 0
+  tags: [authentik, agent, enroll]
+
+- name: Enable and start Authentik system daemon
+  ansible.builtin.systemd:
+    name: ak-sysd
+    enabled: true
+    state: started
+  tags: [authentik, agent]
+
+# Note: ak-agent.service is a user service (in /etc/systemd/user/)
+# It gets started automatically when users login, not as a system service
+
+#===============================================================================
+# CONFIGURE - NSS, SSH
+# Ref: https://docs.goauthentik.io/endpoint-devices/device-authentication/ssh-authentication/
+#===============================================================================
+
+- name: Configure NSS to use Authentik agent
+  ansible.builtin.lineinfile:
+    path: /etc/nsswitch.conf
+    regexp: "^{{ item.db }}:"
+    line: "{{ item.db }}:{{ ' ' * (16 - item.db | length) }}{{ item.sources }}"
+    state: present
+    backup: true
+  loop:
+    - {db: "passwd", sources: "files systemd authentik"}
+    - {db: "group", sources: "files systemd authentik"}
+    - {db: "shadow", sources: "files authentik"}
+  tags: [authentik, agent]
+
+- name: Remove broken AuthorizedKeysCommand (ak ssh-keys doesn't exist)
+  ansible.builtin.blockinfile:
+    path: /etc/ssh/sshd_config
+    marker: "# {mark} ANSIBLE MANAGED - Authentik Agent"
+    state: absent
+    backup: true
+  notify: restart sshd
+  tags: [authentik, agent]
+
+#===============================================================================
+# SSH KEY PROVISIONING - Traditional authorized_keys Method
+#===============================================================================
+
+- name: Ensure home directories exist for Authentik users
+  ansible.builtin.file:
+    path: "/home/{{ item.username }}"
+    state: directory
+    owner: "{{ item.username }}"
+    group: "{{ item.username }}"
+    mode: "0755"
+  loop: "{{ authentik_ssh_users | default([]) }}"
+  when:
+    - item.state == 'present'
+    - item.ssh_keys | default([]) | length > 0
+  failed_when: false  # User might not exist in NSS yet
+  tags: [authentik, agent, ssh-keys]
+
+- name: Check if Authentik users exist in NSS
+  ansible.builtin.command: getent passwd "{{ item.username }}"
+  loop: "{{ authentik_ssh_users | default([]) }}"
+  when:
+    - item.state == 'present'
+    - item.ssh_keys | default([]) | length > 0
+  register: endpoint_agent_user_getent
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  tags: [authentik, agent, ssh-keys]
+
+- name: Fail on unexpected getent errors (rc other than 0 or 2)
+  ansible.builtin.fail:
+    msg: "getent passwd failed for {{ item.item.username }} with rc={{ item.rc }}"
+  loop: "{{ endpoint_agent_user_getent.results | default([]) }}"
+  when:
+    - item.rc is defined
+    - item.rc not in [0, 2]
+  loop_control:
+    label: "{{ item.item.username | default('skipped') }}"
+  tags: [authentik, agent, ssh-keys]
+
+- name: Create .ssh directories for Authentik users
+  ansible.builtin.file:
+    path: "/home/{{ item.item.username }}/.ssh"
+    state: directory
+    owner: "{{ item.item.username }}"
+    group: "{{ item.item.username }}"
+    mode: "0700"
+  loop: "{{ endpoint_agent_user_getent.results | default([]) }}"
+  when:
+    - item.rc == 0
+  loop_control:
+    label: "{{ item.item.username }}"
+  tags: [authentik, agent, ssh-keys]
+
+- name: Provision SSH authorized_keys for Authentik users
+  ansible.posix.authorized_key:
+    user: "{{ item.item.username }}"
+    key: "{{ item.item.ssh_keys | join('\n') }}"
+    state: present
+    exclusive: "{{ endpoint_ssh_key_exclusive }}"
+    manage_dir: false  # We already created the directory
+  loop: "{{ endpoint_agent_user_getent.results | default([]) }}"
+  when:
+    - item.rc == 0
+  loop_control:
+    label: "{{ item.item.username }}"
+  tags: [authentik, agent, ssh-keys]
+
+- name: Remove SSH access for offboarded users
+  ansible.builtin.file:
+    path: "/home/{{ item.username }}/.ssh/authorized_keys"
+    state: absent
+  loop: "{{ authentik_ssh_users | default([]) }}"
+  when: item.state == 'absent'
+  tags: [authentik, agent, ssh-keys]
+
+- name: Display SSH key provisioning summary
+  ansible.builtin.debug:
+    msg:
+      - "============================================="
+      - "SSH Key Provisioning Summary"
+      - "============================================="
+      - "Active users with SSH access:"
+      - "  {{ authentik_ssh_users | default([]) | selectattr('state', 'equalto', 'present') | map(attribute='username') | list | join(', ') | default('None') }}"
+      - ""
+      - "Offboarded users (SSH access removed):"
+      - "  {{ authentik_ssh_users | default([]) | selectattr('state', 'equalto', 'absent') | map(attribute='username') | list | join(', ') | default('None') }}"
+      - "============================================="
+  when: authentik_ssh_users is defined
+  tags: [authentik, agent, ssh-keys]
+
+#===============================================================================
+# SUDO - Maintain existing sudo configuration
+#===============================================================================
+
+- name: Configure sudo access for linux-users group
+  ansible.builtin.copy:
+    dest: /etc/sudoers.d/linux-users
+    mode: "0440"
+    owner: root
+    group: root
+    validate: /usr/sbin/visudo -cf %s
+    content: |
+      # Sudo access for Authentik linux-users group
+      # Managed by Ansible - do not edit manually
+      %linux-users ALL=(ALL:ALL) {{ 'NOPASSWD: ' if endpoint_sudo_nopasswd else '' }}ALL
+  tags: [authentik, agent, sudo]
+
+- name: Ensure local fallback user has sudo access
+  ansible.builtin.copy:
+    dest: /etc/sudoers.d/local-fallback
+    mode: "0440"
+    owner: root
+    group: root
+    validate: /usr/sbin/visudo -cf %s
+    content: |
+      # Local fallback user - NEVER REMOVE
+      # Emergency access when Authentik is unavailable
+      {{ ansible_user }} ALL=(ALL:ALL) NOPASSWD: ALL
+  tags: [authentik, agent, sudo]
+
+#===============================================================================
+# VERIFY - Check agent is working
+#===============================================================================
+
+- name: Verify Authentik system daemon is running
+  ansible.builtin.systemd:
+    name: ak-sysd
+  register: endpoint_agent_sysd_status
+  failed_when:
+    - not ansible_check_mode
+    - endpoint_agent_sysd_status.status.ActiveState != 'active'
+  tags: [authentik, agent, verify]
+
+- name: Verify device enrollment token exists
+  ansible.builtin.stat:
+    path: "/etc/authentik/domains/{{ authentik_domain_name }}.json"
+  register: endpoint_agent_device_token
+  check_mode: false
+  failed_when:
+    - not ansible_check_mode
+    - not endpoint_agent_device_token.stat.exists
+  tags: [authentik, agent, verify]
+
+- name: Display agent status
+  ansible.builtin.debug:
+    msg:
+      - "Authentik agent installation complete"
+      - "System daemon (ak-sysd): {{ endpoint_agent_sysd_status.status.ActiveState | default('not started (check mode)') }}"
+      - "User agent (ak-agent): Starts automatically on user login"
+      - "Device enrolled: {{ endpoint_agent_device_token.stat.exists }}"
+  tags: [authentik, agent, verify]

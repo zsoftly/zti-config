@@ -87,6 +87,10 @@
       tags: [password_auth, security]
       # Enables password authentication alongside OAuth
 
+    - role: 15_ssh_password_flow
+      tags: [ssh_password_flow, security]
+      # Creates SSH password auth flow for PAM exec (no enterprise license)
+
     - role: 16_conditional_mfa
       tags: [conditional_mfa, mfa, security]
       # Requires MFA for password login, skips for OAuth

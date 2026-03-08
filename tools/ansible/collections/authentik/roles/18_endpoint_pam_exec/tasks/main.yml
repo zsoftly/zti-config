@@ -1,0 +1,302 @@
+---
+# 18_endpoint_pam_exec - Main Task File
+# Configures pam_exec with a custom Python script to validate passwords
+# against authentik's flow executor API. No enterprise license required.
+
+#===============================================================================
+# PRE-FLIGHT - Ensure SSH password authentication flow exists
+#===============================================================================
+
+- name: Validate authentik_url uses HTTPS
+  ansible.builtin.assert:
+    that:
+      - authentik_url is defined
+      - authentik_url is match('^https://')
+    fail_msg: "authentik_url must use https:// to protect API credentials in transit."
+  run_once: true
+  delegate_to: localhost
+  tags: [authentik, pam-exec]
+
+- name: Check if API token is available
+  ansible.builtin.set_fact:
+    endpoint_pam_exec_has_api_token: "{{ vault_authentik_token is defined and vault_authentik_token | trim | length > 0 }}"
+  run_once: true
+  tags: [authentik, pam-exec]
+
+- name: Check if SSH password authentication flow exists (API)
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}/api/v3/flows/instances/?slug={{ authentik_flow_slug }}"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ vault_authentik_token | trim }}"
+    status_code: 200
+  register: endpoint_pam_exec_flow_check
+  changed_when: false
+  check_mode: false
+  delegate_to: localhost
+  run_once: true
+  no_log: true
+  when: endpoint_pam_exec_has_api_token
+  tags: [authentik, pam-exec]
+
+- name: Set flow existence fact
+  ansible.builtin.set_fact:
+    endpoint_pam_exec_flow_exists: "{{ endpoint_pam_exec_has_api_token and (endpoint_pam_exec_flow_check.json.results | default([]) | length > 0) }}"
+  run_once: true
+  tags: [authentik, pam-exec]
+
+- name: Create SSH password authentication flow
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}/api/v3/flows/instances/"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ vault_authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      name: "SSH Password Authentication"
+      slug: "{{ authentik_flow_slug }}"
+      designation: "authentication"
+      title: "SSH Password Authentication"
+    status_code: [200, 201]
+  register: endpoint_pam_exec_created_flow
+  delegate_to: localhost
+  run_once: true
+  no_log: true
+  when:
+    - not endpoint_pam_exec_flow_exists
+    - endpoint_pam_exec_has_api_token | default(false)
+    - not ansible_check_mode
+  tags: [authentik, pam-exec]
+
+- name: Get all stages for binding
+  ansible.builtin.uri:
+    # page_size=1000 to avoid pagination; typical installs have <100 stages
+    url: "{{ authentik_url }}/api/v3/stages/all/?page_size=1000"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ vault_authentik_token | trim }}"
+    status_code: 200
+  register: endpoint_pam_exec_all_stages
+  delegate_to: localhost
+  run_once: true
+  no_log: true
+  when:
+    - not endpoint_pam_exec_flow_exists
+    - endpoint_pam_exec_has_api_token | default(false)
+    - not ansible_check_mode
+  tags: [authentik, pam-exec]
+
+- name: Validate required stages exist before binding
+  ansible.builtin.assert:
+    that:
+      - endpoint_pam_exec_all_stages.json.results | selectattr('name', 'equalto', item.name) | list | length > 0
+    fail_msg: "Required stage '{{ item.name }}' not found in authentik. Ensure default stages exist."
+  loop:
+    - {name: "default-authentication-identification"}
+    - {name: "default-authentication-password"}
+    - {name: "default-authentication-login"}
+  loop_control:
+    label: "{{ item.name }}"
+  delegate_to: localhost
+  run_once: true
+  when:
+    - not endpoint_pam_exec_flow_exists
+    - endpoint_pam_exec_has_api_token | default(false)
+    - not ansible_check_mode
+    - endpoint_pam_exec_all_stages.json is defined
+  tags: [authentik, pam-exec]
+
+- name: Bind default stages to SSH password flow
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}/api/v3/flows/bindings/"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ vault_authentik_token | trim }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      target: "{{ endpoint_pam_exec_created_flow.json.pk }}"
+      stage: "{{ endpoint_pam_exec_all_stages.json.results | selectattr('name', 'equalto', item.name) | map(attribute='pk') | first }}"
+      order: "{{ item.order }}"
+      evaluate_on_plan: true
+      re_evaluate_policies: true
+      invalid_response_action: "retry"
+    status_code: [200, 201]
+  loop:
+    - {name: "default-authentication-identification", order: 10}
+    - {name: "default-authentication-password", order: 20}
+    - {name: "default-authentication-login", order: 30}
+  loop_control:
+    label: "{{ item.name }} (order {{ item.order }})"
+  delegate_to: localhost
+  run_once: true
+  no_log: true
+  when:
+    - not endpoint_pam_exec_flow_exists
+    - endpoint_pam_exec_has_api_token | default(false)
+    - not ansible_check_mode
+    - endpoint_pam_exec_created_flow.json is defined
+  tags: [authentik, pam-exec]
+
+- name: Fail if SSH password flow cannot be verified or created
+  ansible.builtin.fail:
+    msg: "Cannot verify or create '{{ authentik_flow_slug }}' flow. Set vault_authentik_token or create the flow manually."
+  run_once: true
+  when:
+    - not (endpoint_pam_exec_flow_exists | default(false))
+    - not (endpoint_pam_exec_has_api_token | default(false))
+    - not ansible_check_mode
+  tags: [authentik, pam-exec]
+
+#===============================================================================
+# DEPLOY - PAM Auth Script
+#===============================================================================
+
+- name: Ensure python3 is installed for PAM exec script
+  ansible.builtin.apt:
+    name: python3
+    state: present
+  when: ansible_facts['os_family'] == 'Debian'
+  tags: [authentik, pam-exec]
+
+- name: Deploy Authentik PAM exec authentication script
+  ansible.builtin.template:
+    src: authentik-pam-auth.py.j2
+    dest: /opt/authentik-pam-auth.py
+    mode: "0700"
+    owner: root
+    group: root
+  tags: [authentik, pam-exec]
+
+#===============================================================================
+# CONFIGURE - PAM Stack (common-auth)
+#===============================================================================
+
+- name: Remove pam_authentik.so from sshd PAM config
+  ansible.builtin.lineinfile:
+    path: /etc/pam.d/sshd
+    regexp: "pam_authentik\\.so"
+    state: absent
+    backup: true
+  notify: restart sshd
+  tags: [authentik, pam-exec]
+
+- name: Remove pam_authentik pam-auth-update profile
+  ansible.builtin.file:
+    path: /usr/share/pam-configs/authentik
+    state: absent
+  register: endpoint_pam_exec_authentik_profile
+  tags: [authentik, pam-exec]
+
+- name: Remove pam_authentik.so from common-session files
+  ansible.builtin.lineinfile:
+    path: "{{ item }}"
+    regexp: "pam_authentik\\.so"
+    state: absent
+  loop:
+    - /etc/pam.d/common-session
+    - /etc/pam.d/common-session-noninteractive
+  tags: [authentik, pam-exec]
+
+- name: Deploy PAM configuration with backup restore on failure
+  tags: [authentik, pam-exec]
+  block:
+    - name: Deploy common-auth with pam_exec configuration
+      ansible.builtin.template:
+        src: common-auth-pam-exec.j2
+        dest: /etc/pam.d/common-auth
+        mode: "0644"
+        backup: true
+      register: endpoint_pam_exec_pam_deploy
+
+  rescue:
+    - name: Restore common-auth backup on deployment failure
+      ansible.builtin.copy:
+        src: "{{ endpoint_pam_exec_pam_deploy.backup_file }}"
+        dest: /etc/pam.d/common-auth
+        remote_src: true
+        mode: "0644"
+      when: endpoint_pam_exec_pam_deploy.backup_file is defined
+
+    - name: Fail after restoring PAM backup
+      ansible.builtin.fail:
+        msg: "PAM configuration deployment failed. Backup restored from {{ endpoint_pam_exec_pam_deploy.backup_file | default('unknown') }}."
+
+#===============================================================================
+# CONFIGURE - SSHD for Password Authentication
+#===============================================================================
+
+- name: Enable PasswordAuthentication in sshd_config
+  ansible.builtin.lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: "^#?PasswordAuthentication"
+    line: "PasswordAuthentication yes"
+    state: present
+    backup: true
+  notify: restart sshd
+  tags: [authentik, pam-exec]
+
+- name: Enable KbdInteractiveAuthentication in sshd_config
+  ansible.builtin.lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: "^#?KbdInteractiveAuthentication"
+    line: "KbdInteractiveAuthentication yes"
+    state: present
+  notify: restart sshd
+  tags: [authentik, pam-exec]
+
+- name: Ensure UsePAM is enabled in sshd_config
+  ansible.builtin.lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: "^#?UsePAM"
+    line: "UsePAM yes"
+    state: present
+  notify: restart sshd
+  tags: [authentik, pam-exec]
+
+#===============================================================================
+# CONFIGURE - Auto-create Home Directories
+#===============================================================================
+
+- name: Enable pam_mkhomedir in common-session
+  ansible.builtin.lineinfile:
+    path: /etc/pam.d/common-session
+    regexp: "pam_mkhomedir.so"
+    line: "session optional        pam_mkhomedir.so skel=/etc/skel umask=077"
+    state: present
+  tags: [authentik, pam-exec]
+
+#===============================================================================
+# VERIFY - Check Configuration
+#===============================================================================
+
+- name: Verify PAM exec script exists and is executable
+  ansible.builtin.stat:
+    path: /opt/authentik-pam-auth.py
+  register: endpoint_pam_exec_script
+  check_mode: false
+  failed_when:
+    - not ansible_check_mode
+    - not endpoint_pam_exec_script.stat.exists or not endpoint_pam_exec_script.stat.executable
+  tags: [authentik, pam-exec]
+
+- name: Validate sshd configuration
+  ansible.builtin.command: sshd -t
+  register: endpoint_pam_exec_sshd_validate
+  changed_when: false
+  failed_when:
+    - not ansible_check_mode
+    - endpoint_pam_exec_sshd_validate.rc != 0
+  tags: [authentik, pam-exec]
+
+- name: Display PAM exec configuration status
+  ansible.builtin.debug:
+    msg:
+      - "Authentik PAM exec authentication configured"
+      - "Script: /opt/authentik-pam-auth.py"
+      - "Authentik URL: {{ authentik_url }}"
+      - "Flow slug: {{ authentik_flow_slug }}"
+      - "UID threshold: {{ authentik_pam_exec_uid_threshold }}"
+      - "Skip SSL verify: {{ authentik_pam_exec_skip_ssl_verify }}"
+  tags: [authentik, pam-exec]

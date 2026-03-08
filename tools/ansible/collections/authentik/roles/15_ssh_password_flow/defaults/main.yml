@@ -1,0 +1,27 @@
+---
+# 15_ssh_password_flow - Default Variables
+# Creates a dedicated SSH password authentication flow without the
+# EndpointStage (which requires an enterprise license). The PAM exec
+# script on endpoints authenticates against this flow.
+#
+# Required variables (provided by configure.yml vars_files):
+#   authentik_url
+#   authentik_api_path
+#   authentik_token
+
+ssh_password_flow:
+  # Flow configuration
+  name: "SSH Password Authentication"
+  slug: "ssh-password-authentication"
+  designation: "authentication"
+  title: "SSH Password Authentication"
+
+  # Stage bindings (uses existing default stages)
+  # These stages are created by authentik on first boot
+  stages:
+    - name: "default-authentication-identification"
+      order: 10
+    - name: "default-authentication-password"
+      order: 20
+    - name: "default-authentication-login"
+      order: 30

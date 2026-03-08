@@ -54,19 +54,37 @@ ansible-playbook tools/ansible/playbooks/04-vpn-mesh.yml \
 
 **Includes:**
 
-- 16 numbered roles (groups, users, security, LDAP, OIDC, SAML, proxy, branding,
-  etc.)
-- 7 playbooks (configure-all, configure-groups, configure-oidc, configure-ldap,
-  etc.)
+- 18 numbered roles (groups, users, security, LDAP, OIDC, SAML, proxy, branding,
+  SSH endpoint agent, PAM exec, etc.)
+- 8 playbooks (configure-all, configure-groups, configure-oidc, configure-ldap,
+  configure-ssh-endpoints, etc.)
 - Brand assets (logos, icons) in `files/`
 - Service-specific documentation in collection directory
 
 **Quick Start:**
 
 ```bash
+# Configure Authentik IdP
 ansible-playbook tools/ansible/playbooks/05-identity.yml \
   -i inventory/hosts.yml
+
+# Configure SSH endpoints with Authentik authentication
+ansible-playbook tools/ansible/collections/authentik/playbooks/configure-ssh-endpoints.yml \
+  -i inventory/hosts.yml --vault-password-file ~/.vault_pass
 ```
+
+**SSH Endpoint Roles:**
+
+| Role                   | Purpose                                                           |
+| ---------------------- | ----------------------------------------------------------------- |
+| `15_ssh_password_flow` | Creates SSH password authentication flow in authentik (API)       |
+| `17_endpoint_agent`    | Installs authentik agent, enrolls device, configures NSS and sudo |
+| `18_endpoint_pam_exec` | Deploys PAM exec script for password auth against authentik API   |
+
+The SSH endpoint playbook (`configure-ssh-endpoints.yml`) supports two modes:
+
+- **Mode A** — Enrollment token from inventory vault (no API token needed)
+- **Mode B** — Token fetched from authentik API at runtime
 
 **Details:** See `tools/ansible/collections/authentik/` for:
 
@@ -188,7 +206,7 @@ ansible-playbook playbook.yml --ask-vault-pass
 2. **Understand defaults** - Review `roles/*/defaults/main.yml`
 3. **Use vault for secrets** - Never commit unencrypted secrets
 4. **Test in staging** - Collections modify complex systems
-5. **Follow numbering** - Respect role order in Authentik (01-16)
+5. **Follow numbering** - Respect role order in Authentik (01-18)
 
 ## Collection-Specific Configuration
 

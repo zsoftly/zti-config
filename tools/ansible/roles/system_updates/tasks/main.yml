@@ -45,7 +45,10 @@
 
 - name: Display script deployment status
   ansible.builtin.debug:
-    msg: "{{ inventory_hostname }}: Script={{ 'Deployed' if script_deployed is changed else 'Exists' }} Path=/usr/local/bin/monthly-system-update.sh"
+    msg: >-
+      {{ inventory_hostname }}:
+      Script={{ 'Deployed' if script_deployed is changed else 'Exists' }}
+      Path=/usr/local/bin/monthly-system-update.sh
   tags: [system-updates, setup, script]
 
 - name: Check if firmware-updates is a directory
@@ -66,6 +69,7 @@
     fi
   args:
     executable: /bin/bash
+  changed_when: firmware_updates_dir.stat.exists and firmware_updates_dir.stat.isdir
   when: firmware_updates_dir.stat.exists and firmware_updates_dir.stat.isdir
   tags: [system-updates, setup]
 
@@ -88,8 +92,11 @@
   tags: [system-updates, run]
 
 - name: Get latest report file
-  ansible.builtin.shell: |
-    ls -t /var/log/system-updates/*-$(hostname)-report.md 2>/dev/null | head -1
+  ansible.builtin.shell:
+    cmd: |
+      set -o pipefail
+      ls -t /var/log/system-updates/*-$(hostname)-report.md 2>/dev/null | head -1
+    executable: /bin/bash
   register: latest_report_path
   changed_when: false
   check_mode: false
@@ -110,10 +117,20 @@
 
 - name: Set reboot needed fact
   ansible.builtin.set_fact:
-    system_updates_reboot_needed: "{{ reboot_required_file.stat.exists or ('Reboot Required: YES' in (update_report_content['content'] | b64decode)) }}"
+    # yamllint disable-line rule:line-length
+    system_updates_reboot_needed: >-
+      {{ reboot_required_file.stat.exists or
+         ('Reboot Required: YES' in (update_report_content['content'] | b64decode)) }}
   tags: [system-updates, reboot]
 
 - name: Display update summary
   ansible.builtin.debug:
-    msg: "{{ inventory_hostname }}: OS={{ 'Updated' if 'OS Packages' in update_script_result.stdout and 'applied' in update_script_result.stdout else 'Current' }} Firmware={{ 'Updated' if 'Firmware' in update_script_result.stdout and 'applied' in update_script_result.stdout else 'Current' }} Reboot={{ 'Required' if system_updates_reboot_needed else 'No' }} Report={{ latest_report_path.stdout }}"
+    msg: >-
+      {{ inventory_hostname }}:
+      OS={{ 'Updated' if 'OS Packages' in update_script_result.stdout
+      and 'applied' in update_script_result.stdout else 'Current' }}
+      Firmware={{ 'Updated' if 'Firmware' in update_script_result.stdout
+      and 'applied' in update_script_result.stdout else 'Current' }}
+      Reboot={{ 'Required' if system_updates_reboot_needed else 'No' }}
+      Report={{ latest_report_path.stdout }}
   tags: [system-updates, report]

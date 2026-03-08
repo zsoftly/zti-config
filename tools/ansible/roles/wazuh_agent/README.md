@@ -297,7 +297,5 @@ systemctl start wazuh-agent
 
 ## Manual Installation (Windows/macOS)
 
-For Windows and macOS endpoints, see:
-
-- [Windows Installation Guide](../../../docs/wazuh-agent-windows.md)
-- [macOS Installation Guide](../../../docs/wazuh-agent-macos.md)
+For Windows and macOS endpoints, see the
+[Wazuh documentation](https://documentation.wazuh.com/current/installation-guide/wazuh-agent/index.html).

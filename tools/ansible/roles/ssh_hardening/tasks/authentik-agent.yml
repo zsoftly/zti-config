@@ -1,18 +1,19 @@
 ---
 # Authentik Agent Configuration - Replace SSSD
-# Official installation process from: https://docs.goauthentik.io/endpoint-devices/authentik-agent/agent-deployment/linux/
+# Ref: https://docs.goauthentik.io/endpoint-devices/authentik-agent/
+# agent-deployment/linux/
 
-#===============================================================================
+# =============================================================================
 # GATHER FACTS - Required when running with --tags
-#===============================================================================
+# =============================================================================
 
 - name: Gather facts for Authentik agent tasks
   ansible.builtin.setup:
   tags: [ssh, authentik, agent]
 
-#===============================================================================
+# =============================================================================
 # BACKUP & CLEANUP - Remove SSSD
-#===============================================================================
+# =============================================================================
 
 - name: Check if SSSD is installed
   ansible.builtin.command: dpkg -l sssd
@@ -81,10 +82,10 @@
   notify: restart sshd
   tags: [ssh, authentik, agent]
 
-#===============================================================================
+# =============================================================================
 # INSTALL - Authentik Agent from Official Repository
 # Ref: https://docs.goauthentik.io/endpoint-devices/authentik-agent/agent-deployment/linux/
-#===============================================================================
+# =============================================================================
 
 - name: Check if Authentik repository already exists
   ansible.builtin.stat:
@@ -103,8 +104,13 @@
   tags: [ssh, authentik, agent]
 
 - name: Verify GPG key fingerprint
-  ansible.builtin.shell: |
-    gpg --import-options show-only --import --fingerprint /tmp/authentik-gpg-key.asc 2>&1 | grep -q '82EE AAD5 531A 856A 9C72  6132 2217 2AF2 AAE3 A237'
+  ansible.builtin.shell:
+    cmd: |
+      set -o pipefail
+      gpg --import-options show-only --import --fingerprint \
+        /tmp/authentik-gpg-key.asc 2>&1 \
+        | grep -q '82EE AAD5 531A 856A 9C72  6132 2217 2AF2 AAE3 A237'
+    executable: /bin/bash
   register: gpg_verify
   changed_when: false
   failed_when: gpg_verify.rc != 0
@@ -161,10 +167,10 @@
     daemon_reload: true
   tags: [ssh, authentik, agent]
 
-#===============================================================================
+# =============================================================================
 # ENROLLMENT - Join device to Authentik
 # Ref: https://docs.goauthentik.io/endpoint-devices/authentik-agent/agent-deployment/linux/
-#===============================================================================
+# =============================================================================
 
 - name: Check if device is already enrolled
   ansible.builtin.stat:
@@ -173,48 +179,24 @@
   check_mode: false
   tags: [ssh, authentik, agent]
 
-- name: Create temporary file for enrollment token
-  ansible.builtin.tempfile:
-    state: file
-    suffix: .token
-  register: token_file
-  when:
-    - not enrollment_check.stat.exists
-    - not ansible_check_mode
-  no_log: true
-  tags: [ssh, authentik, agent, enroll]
-
-- name: Write enrollment token to secure temporary file
-  ansible.builtin.copy:
-    content: "{{ vault_authentik_agent_enrollment_token }}"
-    dest: "{{ token_file.path }}"
-    mode: "0600"
-    owner: root
-    group: root
-  when:
-    - not enrollment_check.stat.exists
-    - not ansible_check_mode
-  no_log: true
-  tags: [ssh, authentik, agent, enroll]
-
 - name: Enroll device to Authentik
-  ansible.builtin.shell: |
-    cat {{ token_file.path }} | ak-sysd domains join {{ authentik_domain_name }} --authentik-url {{ authentik_url }}
+  ansible.builtin.command:
+    argv:
+      - ak-sysd
+      - domains
+      - join
+      - "{{ authentik_domain_name }}"
+      - --authentik-url
+      - "{{ authentik_url }}"
+    stdin: "{{ vault_authentik_agent_enrollment_token }}"
+    stdin_add_newline: false
   when:
     - not enrollment_check.stat.exists
     - not ansible_check_mode
   no_log: true
   register: enrollment_result
-  tags: [ssh, authentik, agent, enroll]
-
-- name: Remove temporary enrollment token file
-  ansible.builtin.file:
-    path: "{{ token_file.path }}"
-    state: absent
-  when:
-    - not enrollment_check.stat.exists
-    - not ansible_check_mode
-  no_log: true
+  changed_when: enrollment_result.rc == 0
+  failed_when: enrollment_result.rc != 0
   tags: [ssh, authentik, agent, enroll]
 
 - name: Enable and start Authentik system daemon
@@ -227,10 +209,10 @@
 # Note: ak-agent.service is a user service (in /etc/systemd/user/)
 # It gets started automatically when users login, not as a system service
 
-#===============================================================================
+# =============================================================================
 # CONFIGURE - NSS, PAM, SSH
 # Ref: https://docs.goauthentik.io/endpoint-devices/device-authentication/ssh-authentication/
-#===============================================================================
+# =============================================================================
 
 - name: Configure NSS to use Authentik agent
   ansible.builtin.lineinfile:
@@ -240,9 +222,9 @@
     state: present
     backup: true
   loop:
-    - { db: "passwd", sources: "files systemd authentik" }
-    - { db: "group", sources: "files systemd authentik" }
-    - { db: "shadow", sources: "files authentik" }
+    - {db: "passwd", sources: "files systemd authentik"}
+    - {db: "group", sources: "files systemd authentik"}
+    - {db: "shadow", sources: "files authentik"}
   tags: [ssh, authentik, agent]
 
 - name: Configure PAM for Authentik authentication
@@ -279,9 +261,9 @@
   notify: restart sshd
   tags: [ssh, authentik, agent]
 
-#===============================================================================
+# =============================================================================
 # SUDO - Maintain existing sudo configuration
-#===============================================================================
+# =============================================================================
 
 - name: Configure sudo access for linux-users group
   ansible.builtin.copy:
@@ -309,9 +291,9 @@
       {{ ansible_user }} ALL=(ALL:ALL) NOPASSWD: ALL
   tags: [ssh, authentik, agent, sudo]
 
-#===============================================================================
+# =============================================================================
 # VERIFY - Check agent is working
-#===============================================================================
+# =============================================================================
 
 - name: Verify Authentik system daemon is running
   ansible.builtin.systemd:

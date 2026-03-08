@@ -201,8 +201,7 @@ sudo /usr/local/bin/monthly-system-update.sh --help
 
 ### 1. Assign Monthly Owner
 
-Rotate ownership each month (see
-[SYSTEM_UPDATE_LOG.md](../../eks-anywhere-lab/docs/SYSTEM_UPDATE_LOG.md))
+Rotate ownership each month (see the system update log)
 
 ### 2. Run Updates (First Week of Month)
 
@@ -253,7 +252,7 @@ fwupdmgr get-devices
 
 ### 6. Update Log
 
-Update `docs/SYSTEM_UPDATE_LOG.md` with:
+Update the system update log with:
 
 - Date of update
 - Your name
@@ -337,7 +336,6 @@ This role replaces the old `firmware_updates` role with expanded functionality:
 ## Resources
 
 - **Ansible Role:** [system_updates](../system_updates/README.md)
-- **Playbooks:**
-  [playbooks/system-update-\*.yml](../../eks-anywhere-lab/playbooks/)
+- **Playbooks:** `tools/ansible/playbooks/02-system-updates.yml`
 - **fwupd Documentation:** https://fwupd.org/
 - **Ubuntu Security Updates:** https://ubuntu.com/security/notices

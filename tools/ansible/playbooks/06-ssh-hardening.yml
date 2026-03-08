@@ -1,0 +1,40 @@
+---
+# 06-ssh-hardening.yml
+# SSH Hardening: Harden SSH and configure Authentik PAM authentication
+# Dependencies:
+#   - 05-identity.yml (Authentik must be configured first)
+#   - 04-vpn-mesh.yml (Network connectivity required)
+# Run: ansible-playbook tools/ansible/playbooks/06-ssh-hardening.yml -i inventory/hosts.yml
+#
+# Tags:
+#   ssh          - SSH hardening tasks (banners, firewall, sshd, fail2ban)
+#   authentik    - All Authentik tasks (agent + PAM)
+#   agent        - Authentik agent only
+#   pam-exec     - PAM exec authentication only
+#   banner       - Login banners only
+#   firewall     - UFW firewall only
+#   fail2ban     - Fail2ban only
+
+- name: SSH Hardening with Authentik Authentication
+  hosts: endpoints
+  become: true
+
+  pre_tasks:
+    - name: Verify enrollment token is available
+      ansible.builtin.assert:
+        that:
+          - vault_authentik_agent_enrollment_token is defined
+          - vault_authentik_agent_enrollment_token | trim | length > 0
+        fail_msg: >-
+          vault_authentik_agent_enrollment_token is not set.
+          Either set it in inventory vault group_vars,
+          or use configure-ssh-endpoints.yml which fetches it from the API.
+      tags: [authentik, agent]
+
+  roles:
+    - role: ssh_hardening
+      tags: [ssh]
+    - role: 17_endpoint_agent
+      tags: [authentik, agent]
+    - role: 18_endpoint_pam_exec
+      tags: [authentik, pam-exec]

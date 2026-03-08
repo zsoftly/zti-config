@@ -1,0 +1,145 @@
+---
+# Configure SSH Endpoints with Authentik Agent and PAM Authentication
+#
+# This playbook has two plays:
+#   1. Fetch enrollment token from authentik API (runs on localhost)
+#      - Skipped if vault_authentik_agent_enrollment_token is already set
+#        in inventory group_vars (e.g., iaas CloudStack vault)
+#   2. Configure endpoints with agent + PAM exec (runs on endpoints)
+#
+# Mode A - Token from inventory vault (iaas):
+#   ansible-playbook configure-ssh-endpoints.yml \
+#     -i <inventory-with-vault-vars> --vault-password-file ~/.vault_pass
+#
+# Mode B - Token fetched from API (standalone):
+#   ansible-playbook configure-ssh-endpoints.yml \
+#     -i <inventory> --vault-password-file ~/.vault_pass \
+#     -e vault_authentik_token=<api-token>
+#
+# Required variables (from inventory group_vars or extra vars):
+#   authentik_url: "https://auth.example.com"
+#   authentik_domain_name: "zsoftly-linux"
+#
+# Plus one of:
+#   vault_authentik_agent_enrollment_token  (Mode A - from vault)
+#   vault_authentik_token                   (Mode B - for API fetch)
+#
+# Tags:
+#   authentik    - All Authentik endpoint tasks
+#   agent        - Authentik agent only
+#   pam-exec     - PAM exec authentication only
+#   ssh-keys     - SSH key provisioning only
+#   enroll       - Enrollment token fetch + device join only
+
+#===============================================================================
+# PLAY 1: Fetch enrollment token from authentik API (localhost)
+# Skipped entirely if vault_authentik_agent_enrollment_token is already set.
+#===============================================================================
+
+- name: Fetch Enrollment Token from Authentik API
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tags: [authentik, agent, enroll]
+
+  vars:
+    authentik_api_path: "/api/v3"
+
+  tasks:
+    - name: Check if enrollment token is already available
+      ansible.builtin.set_fact:
+        token_already_set: "{{ vault_authentik_agent_enrollment_token is defined and vault_authentik_agent_enrollment_token | trim | length > 0 }}"
+
+    - name: Use existing enrollment token from vault
+      ansible.builtin.set_fact:
+        fetched_enrollment_token: "{{ vault_authentik_agent_enrollment_token }}"
+      when: token_already_set | bool
+      no_log: true
+
+    - name: Display token source (vault)
+      ansible.builtin.debug:
+        msg: "Using enrollment token from inventory vault (no API fetch needed)"
+      when: token_already_set | bool
+
+    - name: Validate API token for fetch
+      ansible.builtin.assert:
+        that:
+          - authentik_url is defined
+          - authentik_url is match('^https://')
+          - vault_authentik_token is defined and vault_authentik_token | trim | length > 0
+        fail_msg: >-
+          No enrollment token in vault and no API token available.
+          Either set vault_authentik_agent_enrollment_token in inventory vault,
+          or provide vault_authentik_token for API-based fetch.
+          authentik_url must use https://.
+      when: not token_already_set | bool
+
+    - name: Get existing enrollment tokens from API
+      ansible.builtin.uri:
+        url: "{{ authentik_url }}{{ authentik_api_path }}/endpoints/agents/enrollment_tokens/"
+        method: GET
+        headers:
+          Authorization: "Bearer {{ vault_authentik_token | trim }}"
+        status_code: 200
+      register: existing_tokens
+      no_log: true
+      when: not token_already_set | bool
+
+    - name: Verify at least one enrollment token exists
+      ansible.builtin.assert:
+        that: existing_tokens.json.results | length > 0
+        fail_msg: >-
+          No enrollment tokens found in authentik.
+          Run the manage-endpoint-devices playbook in aws-infra first to create one.
+      when: not token_already_set | bool
+
+    - name: Select first non-expired enrollment token
+      ansible.builtin.set_fact:
+        selected_enrollment_token: >-
+          {{ existing_tokens.json.results
+             | rejectattr('expires', 'defined')
+             | list
+             | first
+             | default(existing_tokens.json.results | first) }}
+      when: not token_already_set | bool
+
+    - name: Retrieve enrollment token key from API
+      ansible.builtin.uri:
+        url: "{{ authentik_url }}{{ authentik_api_path }}/endpoints/agents/enrollment_tokens/{{ selected_enrollment_token.token_uuid }}/view_key/"
+        method: GET
+        headers:
+          Authorization: "Bearer {{ vault_authentik_token | trim }}"
+        status_code: 200
+      register: token_key_response
+      no_log: true
+      when: not token_already_set | bool
+
+    - name: Store fetched enrollment token
+      ansible.builtin.set_fact:
+        fetched_enrollment_token: "{{ token_key_response.json.key }}"
+      when: not token_already_set | bool
+      no_log: true
+
+    - name: Display token fetch status (API)
+      ansible.builtin.debug:
+        msg: "Enrollment token fetched from API (token: {{ selected_enrollment_token.name | default('unnamed') }}, expires: {{ selected_enrollment_token.expires | default('never') }})"
+      when: not token_already_set | bool
+
+#===============================================================================
+# PLAY 2: Configure endpoints with agent + PAM exec
+#===============================================================================
+
+- name: Configure SSH Endpoints with Authentik
+  hosts: endpoints
+  become: true
+
+  vars:
+    # Use the token from play 1 (either from vault or API fetch)
+    vault_authentik_agent_enrollment_token: "{{ hostvars['localhost']['fetched_enrollment_token'] }}"
+
+  roles:
+    - role: 17_endpoint_agent
+      tags: [authentik, agent]
+
+    - role: 18_endpoint_pam_exec
+      tags: [authentik, pam-exec]

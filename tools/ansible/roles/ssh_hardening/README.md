@@ -455,7 +455,7 @@ sudo ufw status numbered
 
 ## Resources
 
-- **SSH Hardening Guide:** https://www.ssh.com/academy/ssh/hardening
+- **SSH Hardening Guide:** https://www.ssh.com/academy/ssh/sshd_config
 - **UFW Documentation:** https://help.ubuntu.com/community/UFW
 - **Fail2ban Manual:** https://www.fail2ban.org/wiki/index.php/Main_Page
 - **CIS Ubuntu Benchmark:** https://www.cisecurity.org/benchmark/ubuntu_linux

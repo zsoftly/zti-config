@@ -57,11 +57,18 @@
 
 - name: Set needs upgrade flag
   ansible.builtin.set_fact:
-    otel_needs_upgrade: "{{ not otel_binary.stat.exists or (otel_version_check.stdout is defined and otel_collector_version not in otel_version_check.stdout) }}"
+    # yamllint disable-line rule:line-length
+    otel_needs_upgrade: >-
+      {{ not otel_binary.stat.exists or
+         (otel_version_check.stdout is defined and
+          otel_collector_version not in otel_version_check.stdout) }}
 
 - name: Show upgrade status
   ansible.builtin.debug:
-    msg: "OTEL upgrade needed: {{ otel_needs_upgrade }} (current: {{ otel_version_check.stdout | default('not installed') }}, target: {{ otel_collector_version }})"
+    msg: >-
+      OTEL upgrade needed: {{ otel_needs_upgrade }}
+      (current: {{ otel_version_check.stdout | default('not installed') }},
+      target: {{ otel_collector_version }})
   when: not ansible_check_mode
 
 - name: Remove old binary before upgrade
@@ -81,6 +88,7 @@
   block:
     - name: Download otel-collector binary
       ansible.builtin.get_url:
+        # yamllint disable-line rule:line-length
         url: "https://github.com/open-telemetry/opentelemetry-collector-releases/releases/download/v{{ otel_collector_version }}/otelcol-contrib_{{ otel_collector_version }}_linux_{{ otel_arch }}.tar.gz"
         dest: /tmp/otelcol-contrib.tar.gz
         mode: "0644"
