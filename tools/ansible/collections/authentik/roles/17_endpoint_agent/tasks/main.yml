@@ -226,6 +226,98 @@
   tags: [authentik, agent]
 
 #===============================================================================
+# CONFIGURE - PAM for native Authentik interactive auth (opt-in)
+# Ref: https://docs.goauthentik.io/endpoint-devices/authentik-agent/agent-deployment/linux/
+# Requires: endpoint_agent_enable_password_auth: true
+#           Connector jwt_federation_providers configured with authentik-cli
+#===============================================================================
+
+- name: Configure pam_authentik.so in common-auth (above pam_unix)
+  ansible.builtin.lineinfile:
+    path: /etc/pam.d/common-auth
+    regexp: "pam_authentik\\.so"
+    # success=ok: on success, proceed to the next required module (standard PAM control)
+    line: "auth [success=ok default=ignore] pam_authentik.so"
+    insertbefore: "pam_unix\\.so"
+    state: present
+    backup: true
+  when: endpoint_agent_enable_password_auth
+  tags: [authentik, agent, pam]
+
+- name: Configure pam_authentik.so in common-session
+  ansible.builtin.lineinfile:
+    path: /etc/pam.d/common-session
+    regexp: "session.*pam_authentik\\.so"
+    line: "session required pam_authentik.so"
+    insertbefore: "pam_unix\\.so"
+    state: present
+    backup: true
+  when: endpoint_agent_enable_password_auth
+  tags: [authentik, agent, pam]
+
+- name: Enable PasswordAuthentication in sshd_config
+  ansible.builtin.lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: "^#?PasswordAuthentication"
+    line: "PasswordAuthentication yes"
+    state: present
+    backup: true
+  notify: restart sshd
+  when: endpoint_agent_enable_password_auth
+  tags: [authentik, agent, pam]
+
+- name: Enable KbdInteractiveAuthentication in sshd_config
+  ansible.builtin.lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: "^#?KbdInteractiveAuthentication"
+    line: "KbdInteractiveAuthentication yes"
+    state: present
+  notify: restart sshd
+  when: endpoint_agent_enable_password_auth
+  tags: [authentik, agent, pam]
+
+- name: Ensure UsePAM is enabled in sshd_config
+  ansible.builtin.lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: "^#?UsePAM"
+    line: "UsePAM yes"
+    state: present
+  notify: restart sshd
+  when: endpoint_agent_enable_password_auth
+  tags: [authentik, agent, pam]
+
+- name: Enable pam_mkhomedir in common-session
+  ansible.builtin.lineinfile:
+    path: /etc/pam.d/common-session
+    regexp: "pam_mkhomedir\\.so"
+    line: "session optional        pam_mkhomedir.so skel=/etc/skel umask=077"
+    state: present
+  when: endpoint_agent_enable_password_auth
+  tags: [authentik, agent, pam]
+
+- name: Validate sshd configuration after PAM changes
+  ansible.builtin.command: sshd -t
+  changed_when: false
+  when: endpoint_agent_enable_password_auth
+  tags: [authentik, agent, pam]
+
+- name: Validate PAM configuration is functional
+  ansible.builtin.command: pamtester sshd {{ ansible_user }} authenticate
+  changed_when: false
+  failed_when: false
+  register: endpoint_agent_pam_test
+  when: endpoint_agent_enable_password_auth
+  tags: [authentik, agent, pam]
+
+- name: Warn if PAM validation failed
+  ansible.builtin.debug:
+    msg: "[WARNING] PAM validation returned rc={{ endpoint_agent_pam_test.rc }}. Verify SSH access before closing this session."
+  when:
+    - endpoint_agent_enable_password_auth
+    - endpoint_agent_pam_test.rc | default(0) != 0
+  tags: [authentik, agent, pam]
+
+#===============================================================================
 # SSH KEY PROVISIONING - Traditional authorized_keys Method
 #===============================================================================
 

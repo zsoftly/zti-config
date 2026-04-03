@@ -15,6 +15,7 @@
     fail_msg: "authentik_url must use https:// to protect API credentials in transit."
   run_once: true
   delegate_to: localhost
+  become: false
   tags: [authentik, pam-exec]
 
 - name: Check if API token is available
@@ -34,6 +35,7 @@
   changed_when: false
   check_mode: false
   delegate_to: localhost
+  become: false
   run_once: true
   no_log: true
   when: endpoint_pam_exec_has_api_token
@@ -61,6 +63,7 @@
     status_code: [200, 201]
   register: endpoint_pam_exec_created_flow
   delegate_to: localhost
+  become: false
   run_once: true
   no_log: true
   when:
@@ -79,6 +82,7 @@
     status_code: 200
   register: endpoint_pam_exec_all_stages
   delegate_to: localhost
+  become: false
   run_once: true
   no_log: true
   when:
@@ -99,6 +103,7 @@
   loop_control:
     label: "{{ item.name }}"
   delegate_to: localhost
+  become: false
   run_once: true
   when:
     - not endpoint_pam_exec_flow_exists
@@ -130,6 +135,7 @@
   loop_control:
     label: "{{ item.name }} (order {{ item.order }})"
   delegate_to: localhost
+  become: false
   run_once: true
   no_log: true
   when:
