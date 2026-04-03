@@ -251,16 +251,42 @@
     - endpoint_agent_sysd_status.rc | default(1) != 0
   tags: [authentik, agent, pam]
 
+- name: Validate common-auth has expected PAM layout (pam_unix then pam_deny)
+  ansible.builtin.shell: |
+    set -o pipefail
+    grep -n '^auth' /etc/pam.d/common-auth | grep -v pam_authentik
+  args:
+    executable: /bin/bash
+  register: endpoint_agent_pam_layout
+  changed_when: false
+  failed_when: false
+  when: endpoint_agent_enable_password_auth
+  tags: [authentik, agent, pam]
+
+- name: Verify pam_unix and pam_deny are present in expected order
+  ansible.builtin.assert:
+    that:
+      - endpoint_agent_pam_layout.stdout is search('pam_unix')
+      - endpoint_agent_pam_layout.stdout is search('pam_deny')
+    fail_msg: >-
+      common-auth does not have the expected layout (pam_unix + pam_deny).
+      Cannot safely insert pam_authentik.so with success=2 skip count.
+      Current layout: {{ endpoint_agent_pam_layout.stdout_lines | default([]) }}
+  when: endpoint_agent_enable_password_auth
+  tags: [authentik, agent, pam]
+
 - name: Configure pam_authentik.so in common-auth (above pam_unix)
   ansible.builtin.lineinfile:
     path: /etc/pam.d/common-auth
     regexp: "pam_authentik\\.so"
     # success=2: skip pam_unix.so and pam_deny.so on successful Authentik auth.
     # This count must match the number of auth lines between this rule and pam_permit.
+    # Validated by the assert above that pam_unix and pam_deny are present.
     line: "auth [success=2 default=ignore] pam_authentik.so"
     insertbefore: "pam_unix\\.so"
     state: present
     backup: true
+  register: endpoint_agent_pam_common_auth
   when: endpoint_agent_enable_password_auth
   tags: [authentik, agent, pam]
 
@@ -280,6 +306,7 @@
     path: /etc/ssh/sshd_config
     regexp: "^#?PasswordAuthentication"
     line: "PasswordAuthentication yes"
+    insertbefore: "^Match"
     state: present
     backup: true
   notify: restart sshd
@@ -291,6 +318,7 @@
     path: /etc/ssh/sshd_config
     regexp: "^#?KbdInteractiveAuthentication"
     line: "KbdInteractiveAuthentication yes"
+    insertbefore: "^Match"
     state: present
   notify: restart sshd
   when: endpoint_agent_enable_password_auth
@@ -301,6 +329,7 @@
     path: /etc/ssh/sshd_config
     regexp: "^#?UsePAM"
     line: "UsePAM yes"
+    insertbefore: "^Match"
     state: present
   notify: restart sshd
   when: endpoint_agent_enable_password_auth

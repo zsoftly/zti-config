@@ -199,7 +199,8 @@ endpoint_agent_enable_password_auth: false # opt-in for SSH password auth
 - Configures `pam_authentik.so` in `common-auth` and `common-session`
 - Enables `PasswordAuthentication` and `KbdInteractiveAuthentication` in sshd
 - Adds `pam_mkhomedir` for auto home directory creation
-- Validates `ak-sysd` is running before applying PAM changes
+- Validates `ak-sysd` is running and `common-auth` layout before applying PAM changes
+- Places sshd directives before any `Match` block to avoid conditional scoping
 
 ---
 
@@ -210,7 +211,8 @@ endpoint_agent_enable_password_auth: false # opt-in for SSH password auth
 **Location:** `tools/ansible/collections/authentik/roles/18_endpoint_pam_exec/`
 
 **Note:** This is a fallback for when native `pam_authentik.so` (Role 17) is not
-available. Only included when `endpoint_agent_enable_pam_exec: true`.
+available. Only included when `endpoint_agent_enable_pam_exec: true` and
+`endpoint_agent_enable_password_auth` is false. Both roles cannot run together.
 
 **Key Variables:**
 
