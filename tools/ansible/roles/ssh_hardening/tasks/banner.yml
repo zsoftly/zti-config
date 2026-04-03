@@ -39,4 +39,3 @@
     - "91-release-upgrade"
   failed_when: false
   tags: [ssh, banner]
-
