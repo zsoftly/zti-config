@@ -4,6 +4,21 @@
 # against authentik's flow executor API. No enterprise license required.
 
 #===============================================================================
+# PRE-FLIGHT - Guard against conflicting PAM configuration
+#===============================================================================
+
+- name: Fail if native pam_authentik (Role 17) is also enabled
+  ansible.builtin.assert:
+    that:
+      - not (endpoint_agent_enable_password_auth | default(false) | bool)
+    fail_msg: >-
+      Both endpoint_agent_enable_password_auth and endpoint_agent_enable_pam_exec are true.
+      Role 17 (native pam_authentik.so) and Role 18 (pam_exec fallback) cannot run together.
+      Set endpoint_agent_enable_password_auth: false to use the pam_exec fallback.
+  run_once: true
+  tags: [authentik, pam-exec]
+
+#===============================================================================
 # PRE-FLIGHT - Ensure SSH password authentication flow exists
 #===============================================================================
 
