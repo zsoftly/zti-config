@@ -141,5 +141,8 @@
     - role: 17_endpoint_agent
       tags: [authentik, agent]
 
+    # pam_exec fallback: only when explicitly enabled via variable.
+    # Native pam_authentik.so (configured in Role 17) is preferred.
     - role: 18_endpoint_pam_exec
       tags: [authentik, pam-exec]
+      when: endpoint_agent_enable_pam_exec | default(false)

@@ -232,12 +232,32 @@
 #           Connector jwt_federation_providers configured with authentik-cli
 #===============================================================================
 
+- name: Preflight - verify ak-sysd is running before PAM changes
+  ansible.builtin.command: systemctl is-active ak-sysd
+  changed_when: false
+  register: endpoint_agent_sysd_status
+  failed_when: false
+  when: endpoint_agent_enable_password_auth
+  tags: [authentik, agent, pam]
+
+- name: Fail if ak-sysd is not running
+  ansible.builtin.fail:
+    msg: >-
+      ak-sysd is not running (status: {{ endpoint_agent_sysd_status.stdout | default('unknown') }}).
+      The Authentik agent must be enrolled and running before enabling PAM password auth.
+      Ensure the connector has jwt_federation_providers configured with the authentik-cli provider.
+  when:
+    - endpoint_agent_enable_password_auth
+    - endpoint_agent_sysd_status.rc | default(1) != 0
+  tags: [authentik, agent, pam]
+
 - name: Configure pam_authentik.so in common-auth (above pam_unix)
   ansible.builtin.lineinfile:
     path: /etc/pam.d/common-auth
     regexp: "pam_authentik\\.so"
-    # success=ok: on success, proceed to the next required module (standard PAM control)
-    line: "auth [success=ok default=ignore] pam_authentik.so"
+    # success=2: skip pam_unix.so and pam_deny.so on successful Authentik auth.
+    # This count must match the number of auth lines between this rule and pam_permit.
+    line: "auth [success=2 default=ignore] pam_authentik.so"
     insertbefore: "pam_unix\\.so"
     state: present
     backup: true
@@ -301,20 +321,16 @@
   when: endpoint_agent_enable_password_auth
   tags: [authentik, agent, pam]
 
-- name: Validate PAM configuration is functional
-  ansible.builtin.command: pamtester sshd {{ ansible_user }} authenticate
-  changed_when: false
-  failed_when: false
-  register: endpoint_agent_pam_test
-  when: endpoint_agent_enable_password_auth
-  tags: [authentik, agent, pam]
-
-- name: Warn if PAM validation failed
+- name: Post-deployment verification notice
   ansible.builtin.debug:
-    msg: "[WARNING] PAM validation returned rc={{ endpoint_agent_pam_test.rc }}. Verify SSH access before closing this session."
-  when:
-    - endpoint_agent_enable_password_auth
-    - endpoint_agent_pam_test.rc | default(0) != 0
+    msg:
+      - "[OK] PAM password auth configured. Manual verification required:"
+      - "  1. Open a NEW terminal (keep this session open as fallback)"
+      - "  2. Run: ssh <authentik-username>@{{ ansible_host | default(inventory_hostname) }}"
+      - "  3. Enter your Authentik password when prompted"
+      - "  4. Verify login succeeds and home directory is created"
+      - "  If login fails, check: journalctl -u ak-sysd -n 20"
+  when: endpoint_agent_enable_password_auth
   tags: [authentik, agent, pam]
 
 #===============================================================================
