@@ -75,11 +75,11 @@ ansible-playbook tools/ansible/collections/authentik/playbooks/configure-ssh-end
 
 **SSH Endpoint Roles:**
 
-| Role                   | Purpose                                                                    |
-| ---------------------- | -------------------------------------------------------------------------- |
-| `15_ssh_password_flow` | Creates SSH password authentication flow in authentik (API)                |
-| `17_endpoint_agent`    | Installs agent, enrolls device, configures NSS, sudo, and PAM (opt-in)     |
-| `18_endpoint_pam_exec` | Fallback PAM exec script for password auth (opt-in, when native PAM fails) |
+| Role                   | Purpose                                                            |
+| ---------------------- | ------------------------------------------------------------------ |
+| `15_ssh_password_flow` | Creates SSH password authentication flow in authentik (API)        |
+| `17_endpoint_agent`    | Installs agent, enrolls device, configures NSS, sudo, and SSH keys |
+| `18_endpoint_pam_exec` | SSH password auth via pam_exec against authentik flow API (opt-in) |
 
 The SSH endpoint playbook (`configure-ssh-endpoints.yml`) supports two modes:
 

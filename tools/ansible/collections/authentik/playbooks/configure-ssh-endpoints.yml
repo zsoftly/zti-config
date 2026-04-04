@@ -141,10 +141,8 @@
     - role: 17_endpoint_agent
       tags: [authentik, agent]
 
-    # pam_exec fallback: only when explicitly enabled and native PAM is not active.
-    # Native pam_authentik.so (configured in Role 17) is preferred.
+    # SSH password authentication via pam_exec against Authentik flow API.
+    # Opt-in: set endpoint_agent_enable_pam_exec: true in inventory.
     - role: 18_endpoint_pam_exec
       tags: [authentik, pam-exec]
-      when:
-        - endpoint_agent_enable_pam_exec | default(false) | bool
-        - not (endpoint_agent_enable_password_auth | default(false) | bool)
+      when: endpoint_agent_enable_pam_exec | default(false) | bool

@@ -168,7 +168,7 @@ authentik_flow_slug: "ssh-password-authentication"
 
 ### 17_endpoint_agent
 
-**Purpose:** Install authentik agent, enroll device, configure NSS, sudo, and PAM
+**Purpose:** Install authentik agent, enroll device, configure NSS and sudo
 
 **Location:** `tools/ansible/collections/authentik/roles/17_endpoint_agent/`
 
@@ -180,7 +180,6 @@ authentik_domain_name: "zsoftly-linux"
 vault_authentik_agent_enrollment_token: "..." # from vault
 endpoint_sudo_nopasswd: false
 endpoint_ssh_key_exclusive: true
-endpoint_agent_enable_password_auth: false # opt-in for SSH password auth
 ```
 
 **Key Features:**
@@ -189,30 +188,20 @@ endpoint_agent_enable_password_auth: false # opt-in for SSH password auth
 - Installs authentik agent packages from official repository
 - Enrolls device to authentik domain
 - Configures NSS (passwd, group, shadow) for authentik user resolution
-- Configures native `pam_authentik.so` for SSH password auth (opt-in)
 - Provisions SSH authorized_keys for authentik users
 - Configures sudo for `linux-users` group
-
-**PAM password auth** (`endpoint_agent_enable_password_auth: true`):
-
-- Requires connector `jwt_federation_providers` configured with `authentik-cli`
-- Configures `pam_authentik.so` in `common-auth` and `common-session`
-- Enables `PasswordAuthentication` and `KbdInteractiveAuthentication` in sshd
-- Adds `pam_mkhomedir` for auto home directory creation
-- Validates `ak-sysd` is running and `common-auth` layout before applying PAM changes
-- Places sshd directives before any `Match` block to avoid conditional scoping
 
 ---
 
 ### 18_endpoint_pam_exec
 
-**Purpose:** Fallback PAM exec authentication against authentik flow executor API
+**Purpose:** SSH password authentication via pam_exec against authentik flow API
 
 **Location:** `tools/ansible/collections/authentik/roles/18_endpoint_pam_exec/`
 
-**Note:** This is a fallback for when native `pam_authentik.so` (Role 17) is not
-available. Only included when `endpoint_agent_enable_pam_exec: true` and
-`endpoint_agent_enable_password_auth` is false. Both roles cannot run together.
+**Note:** Opt-in via `endpoint_agent_enable_pam_exec: true`. Native `libpam-authentik`
+interactive auth is not functional on headless servers (agent v0.40.5), so this role
+uses a Python script that calls the Authentik flow executor API directly.
 
 **Key Variables:**
 
@@ -248,8 +237,8 @@ No dependencies:
 
 Authentik SSH (ordered):
   15_ssh_password_flow  (localhost, API only)
-  └── 17_endpoint_agent  (requires authentik + enrollment token)
-      └── 18_endpoint_pam_exec  (fallback, opt-in via endpoint_agent_enable_pam_exec)
+  └── 17_endpoint_agent  (agent install, NSS, sudo, SSH keys)
+      └── 18_endpoint_pam_exec  (SSH password auth, opt-in via endpoint_agent_enable_pam_exec)
 ```
 
 ## Using Roles
