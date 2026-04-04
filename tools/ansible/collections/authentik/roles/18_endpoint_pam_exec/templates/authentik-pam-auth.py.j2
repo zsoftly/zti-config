@@ -53,6 +53,7 @@ def authenticate(username, password):
 
     cj = http.cookiejar.CookieJar()
     opener = urllib.request.build_opener(handler, urllib.request.HTTPCookieProcessor(cj))
+    opener.addheaders = [('User-Agent', 'authentik-pam/1.0')]
 
     try:
         # Stage 1: Initiate the flow and get the identification challenge

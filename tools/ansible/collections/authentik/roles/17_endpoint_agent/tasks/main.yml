@@ -226,6 +226,143 @@
   tags: [authentik, agent]
 
 #===============================================================================
+# CONFIGURE - PAM for native Authentik interactive auth (opt-in)
+# Ref: https://docs.goauthentik.io/endpoint-devices/authentik-agent/agent-deployment/linux/
+# Requires: endpoint_agent_enable_password_auth: true
+#           Connector jwt_federation_providers configured with authentik-cli
+#===============================================================================
+
+- name: Preflight - verify ak-sysd is running before PAM changes
+  ansible.builtin.command: systemctl is-active ak-sysd
+  changed_when: false
+  register: endpoint_agent_sysd_status
+  failed_when: false
+  when: endpoint_agent_enable_password_auth
+  tags: [authentik, agent, pam]
+
+- name: Fail if ak-sysd is not running
+  ansible.builtin.fail:
+    msg: >-
+      ak-sysd is not running (status: {{ endpoint_agent_sysd_status.stdout | default('unknown') }}).
+      The Authentik agent must be enrolled and running before enabling PAM password auth.
+      Ensure the connector has jwt_federation_providers configured with the authentik-cli provider.
+  when:
+    - endpoint_agent_enable_password_auth
+    - endpoint_agent_sysd_status.rc | default(1) != 0
+  tags: [authentik, agent, pam]
+
+- name: Validate common-auth has expected PAM layout (pam_unix then pam_deny)
+  ansible.builtin.shell: |
+    set -o pipefail
+    grep -n '^auth' /etc/pam.d/common-auth | grep -v pam_authentik
+  args:
+    executable: /bin/bash
+  register: endpoint_agent_pam_layout
+  changed_when: false
+  failed_when: false
+  when: endpoint_agent_enable_password_auth
+  tags: [authentik, agent, pam]
+
+- name: Verify pam_unix and pam_deny are present in expected order
+  ansible.builtin.assert:
+    that:
+      - endpoint_agent_pam_layout.stdout is search('pam_unix')
+      - endpoint_agent_pam_layout.stdout is search('pam_deny')
+    fail_msg: >-
+      common-auth does not have the expected layout (pam_unix + pam_deny).
+      Cannot safely insert pam_authentik.so with success=2 skip count.
+      Current layout: {{ endpoint_agent_pam_layout.stdout_lines | default([]) }}
+  when: endpoint_agent_enable_password_auth
+  tags: [authentik, agent, pam]
+
+- name: Configure pam_authentik.so in common-auth (above pam_unix)
+  ansible.builtin.lineinfile:
+    path: /etc/pam.d/common-auth
+    regexp: "pam_authentik\\.so"
+    # success=2: skip pam_unix.so and pam_deny.so on successful Authentik auth.
+    # This count must match the number of auth lines between this rule and pam_permit.
+    # Validated by the assert above that pam_unix and pam_deny are present.
+    line: "auth [success=2 default=ignore] pam_authentik.so"
+    insertbefore: "pam_unix\\.so"
+    state: present
+    backup: true
+  register: endpoint_agent_pam_common_auth
+  when: endpoint_agent_enable_password_auth
+  tags: [authentik, agent, pam]
+
+- name: Configure pam_authentik.so in common-session
+  ansible.builtin.lineinfile:
+    path: /etc/pam.d/common-session
+    regexp: "session.*pam_authentik\\.so"
+    line: "session required pam_authentik.so"
+    insertbefore: "pam_unix\\.so"
+    state: present
+    backup: true
+  when: endpoint_agent_enable_password_auth
+  tags: [authentik, agent, pam]
+
+- name: Enable PasswordAuthentication in sshd_config
+  ansible.builtin.lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: "^#?PasswordAuthentication"
+    line: "PasswordAuthentication yes"
+    insertbefore: "^Match"
+    state: present
+    backup: true
+  notify: restart sshd
+  when: endpoint_agent_enable_password_auth
+  tags: [authentik, agent, pam]
+
+- name: Enable KbdInteractiveAuthentication in sshd_config
+  ansible.builtin.lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: "^#?KbdInteractiveAuthentication"
+    line: "KbdInteractiveAuthentication yes"
+    insertbefore: "^Match"
+    state: present
+  notify: restart sshd
+  when: endpoint_agent_enable_password_auth
+  tags: [authentik, agent, pam]
+
+- name: Ensure UsePAM is enabled in sshd_config
+  ansible.builtin.lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: "^#?UsePAM"
+    line: "UsePAM yes"
+    insertbefore: "^Match"
+    state: present
+  notify: restart sshd
+  when: endpoint_agent_enable_password_auth
+  tags: [authentik, agent, pam]
+
+- name: Enable pam_mkhomedir in common-session
+  ansible.builtin.lineinfile:
+    path: /etc/pam.d/common-session
+    regexp: "pam_mkhomedir\\.so"
+    line: "session optional        pam_mkhomedir.so skel=/etc/skel umask=077"
+    state: present
+  when: endpoint_agent_enable_password_auth
+  tags: [authentik, agent, pam]
+
+- name: Validate sshd configuration after PAM changes
+  ansible.builtin.command: sshd -t
+  changed_when: false
+  when: endpoint_agent_enable_password_auth
+  tags: [authentik, agent, pam]
+
+- name: Post-deployment verification notice
+  ansible.builtin.debug:
+    msg:
+      - "[OK] PAM password auth configured. Manual verification required:"
+      - "  1. Open a NEW terminal (keep this session open as fallback)"
+      - "  2. Run: ssh <authentik-username>@{{ ansible_host | default(inventory_hostname) }}"
+      - "  3. Enter your Authentik password when prompted"
+      - "  4. Verify login succeeds and home directory is created"
+      - "  If login fails, check: journalctl -u ak-sysd -n 20"
+  when: endpoint_agent_enable_password_auth
+  tags: [authentik, agent, pam]
+
+#===============================================================================
 # SSH KEY PROVISIONING - Traditional authorized_keys Method
 #===============================================================================
 

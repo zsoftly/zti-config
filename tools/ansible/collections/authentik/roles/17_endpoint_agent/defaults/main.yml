@@ -29,3 +29,10 @@ endpoint_sudo_nopasswd: false
 # SSH key exclusive mode
 # When true (default), authorized_key removes keys not in the provided list
 endpoint_ssh_key_exclusive: true
+
+# Enable SSH password authentication via PAM
+# When false (default), only SSH key authentication is allowed.
+# When true, configures pam_authentik.so and enables PasswordAuthentication
+# in sshd_config so users can log in with their Authentik credentials.
+# Requires the connector to have jwt_federation_providers configured.
+endpoint_agent_enable_password_auth: false
