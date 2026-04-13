@@ -16,3 +16,8 @@ authentik_pam_exec_skip_ssl_verify: false
 
 # Minimum UID to authenticate via authentik (lower UIDs use local auth)
 authentik_pam_exec_uid_threshold: 1001
+
+# Skip API-based flow check/creation — set to true when the flow already exists
+# externally (e.g. created by another playbook) and vault_authentik_token is
+# not available in the current inventory.
+endpoint_pam_exec_skip_flow_check: false

@@ -1,6 +1,5 @@
 ---
 # Wazuh Agent Defaults
-# Minimal configuration - policies managed by Wazuh Manager
 
 # Manager connection
 wazuh_manager_address: "wazuh.example.com"
@@ -10,21 +9,25 @@ wazuh_manager_enrollment_port: 1515
 
 # Agent identity
 wazuh_agent_name: "{{ inventory_hostname }}"
-wazuh_agent_group: ""  # Agent group(s) - comma-separated for multiple (e.g., "vpn", "lab", "endpoint")
+wazuh_agent_group: ""
 
 # Package management
-# - "present": Install if missing, don't touch if already installed (allows UI upgrades)
-# - "latest": Always upgrade to latest version
+# - "present": install if missing (allows upgrades via UI)
+# - "latest":  always upgrade to latest
 wazuh_agent_package_state: "present"
 
-# Enrollment (optional - agent auto-enrolls without password by default)
+# Enrollment — empty means auto-enroll without password
 wazuh_authd_password: ""
 
-# Service
 wazuh_agent_service_state: "started"
 wazuh_agent_service_enabled: true
 
-# Remote commands
-# Allow Wazuh manager to run commands on this agent
-# Default: false (disabled for security)
+# Remote commands — manager can run commands on agent. Disabled by default.
 wazuh_remote_commands_enabled: false
+
+# Docker monitoring (docker-listener wodle). Enable on Docker hosts only.
+# Prerequisites (invoking playbook handles these):
+#   - Docker Engine installed
+#   - python3-docker package installed
+#   - wazuh user in `docker` group (for /var/run/docker.sock access)
+wazuh_docker_monitoring_enabled: false

@@ -1,8 +1,8 @@
 # Wazuh Agent Role
 
-Shared Ansible role for installing and configuring the Wazuh agent on Linux
-systems. Agents connect to Wazuh manager via Traefik NLB and send security
-events, logs, and system inventory data.
+Shared Ansible role for installing and configuring the Wazuh agent on Linux systems. Agents connect to Wazuh manager and send security events, logs, system inventory, and (optionally) Docker events.
+
+The rendered `ossec.conf` enables the full Wazuh XDR module set by default: File Integrity Monitoring, rootkit detection, Security Configuration Assessment (SCA), system inventory (syscollector), log collection, and Active Response. Docker monitoring is opt-in via `wazuh_docker_monitoring_enabled`.
 
 ## Requirements
 
@@ -60,6 +60,9 @@ wazuh_agent_service_enabled: true
 
 # Remote commands (default: disabled for security)
 wazuh_remote_commands_enabled: false # Allow manager to run commands on agent
+
+# Docker monitoring (docker-listener wodle). Enable on hosts running Docker. Requires python3-docker and the `wazuh` user in the `docker` group — both handled by the invoking playbook.
+wazuh_docker_monitoring_enabled: false
 ```
 
 ## Usage
@@ -110,6 +113,8 @@ post_tasks:
 
 ### File Integrity Monitoring (FIM)
 
+Scan every 12h (`frequency=43200`), scan on start, realtime sync every 5m.
+
 | Path        | Description           |
 | ----------- | --------------------- |
 | `/etc`      | System configuration  |
@@ -118,6 +123,8 @@ post_tasks:
 | `/bin`      | Essential binaries    |
 | `/sbin`     | System admin binaries |
 | `/boot`     | Boot files            |
+
+Exclusions: `/etc/mtab`, `/etc/hosts.deny`, `/etc/mail/statistics`, `/etc/random-seed`, `/etc/random.seed`, `/etc/adjtime`, `/etc/prelink.cache`, and any path matching `.log$|.swp$`. NFS, `/dev`, `/proc`, `/sys` are skipped.
 
 ### Log Analysis
 
@@ -134,27 +141,39 @@ post_tasks:
 - `/var/log/secure` - Authentication logs
 - `/var/log/audit/audit.log` - Audit logs
 
-### System Inventory
+### System Inventory (syscollector)
+
+Scan every 1h, scan on start.
 
 - Hardware information
 - Operating system details
 - Network interfaces and configuration
 - Installed packages
 - Running processes
-- Open ports
+- Open ports (listening only)
 
 ### Security Assessment
 
-- CIS benchmarks compliance
-- Security Configuration Assessment (SCA)
-- Rootkit detection
-- Vulnerability detection
+- Rootkit detection (rootcheck) — scan every 12h, checks files, trojans, /dev, /sys, running PIDs, open ports, network interfaces
+- Security Configuration Assessment (SCA) — CIS benchmarks, scan every 12h
+- Vulnerability detection — driven by manager-side CVE feed
 
-### Command Monitoring
+### Docker Monitoring (optional)
 
-- Disk usage (`df -P`) - every 6 minutes
-- Network connections (`netstat`) - every 6 minutes
-- Recent logins (`last -n 20`) - every 6 minutes
+Enable with `wazuh_docker_monitoring_enabled: true`. Uses the Wazuh `docker-listener` wodle to subscribe to the Docker daemon event stream.
+
+Captured events: container create/start/stop/kill/die, image pull/delete, exec_create/exec_start (shells opened in running containers), volume mount/unmount, network create/connect/disconnect.
+
+### Active Response
+
+Enabled by default. Allows the manager to trigger response commands (e.g. `firewall-drop`, `disable-account`, `restart-wazuh`) on the agent when matching rules fire.
+
+### Client Buffer
+
+- Queue size: 5000 events
+- Rate limit: 500 events/sec
+
+Prevents the agent from overwhelming the manager during log bursts; overflow is queued locally and drained when the manager catches up.
 
 ## How It Works
 
