@@ -252,6 +252,17 @@
   changed_when: true
   tags: [ssh, authentik, agent]
 
+- name: Set pam_authentik session to optional so ak-sysd outages do not block login
+  ansible.builtin.replace:
+    path: "{{ item }}"
+    regexp: '^session\s+required\s+(pam_authentik\.so.*)$'
+    replace: 'session optional \1'
+    backup: false
+  loop:
+    - /etc/pam.d/common-session
+    - /etc/pam.d/common-session-noninteractive
+  tags: [ssh, authentik, agent, pam]
+
 - name: Remove broken AuthorizedKeysCommand (ak ssh-keys doesn't exist)
   ansible.builtin.blockinfile:
     path: /etc/ssh/sshd_config

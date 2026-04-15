@@ -66,6 +66,24 @@
         state: "{{ wazuh_agent_package_state }}"
 
 # Configuration
+- name: Deploy enrollment password file
+  ansible.builtin.copy:
+    content: "{{ wazuh_authd_password }}"
+    dest: /var/ossec/etc/authd.pass
+    owner: root
+    group: wazuh
+    mode: "0640"
+  when: wazuh_authd_password | default('') | length > 0
+  no_log: true
+  notify: Restart wazuh agent
+
+- name: Remove enrollment password file
+  ansible.builtin.file:
+    path: /var/ossec/etc/authd.pass
+    state: absent
+  when: wazuh_authd_password | default('') | length == 0
+  notify: Restart wazuh agent
+
 - name: Deploy config
   ansible.builtin.template:
     src: ossec.conf.j2
