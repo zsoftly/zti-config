@@ -185,7 +185,7 @@
       before enabling wazuh_docker_monitoring_enabled. Install Docker and re-run this playbook.
   when:
     - wazuh_docker_monitoring_enabled | default(false)
-    - wazuh_docker_group_check.failed | default(true)
+    - "'docker' not in ansible_facts.getent_group | default({})"
 
 - name: Install python3-docker for Docker monitoring wodle
   when:
