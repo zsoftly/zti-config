@@ -26,8 +26,6 @@ wazuh_agent_service_enabled: true
 wazuh_remote_commands_enabled: false
 
 # Docker monitoring (docker-listener wodle). Enable on Docker hosts only.
-# Prerequisites (invoking playbook handles these):
-#   - Docker Engine installed
-#   - python3-docker package installed
-#   - wazuh user in `docker` group (for /var/run/docker.sock access)
+# Requires Docker Engine to be installed before this role runs.
+# The role installs python3-docker and adds wazuh to the docker group automatically.
 wazuh_docker_monitoring_enabled: false

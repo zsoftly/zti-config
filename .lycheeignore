@@ -1,0 +1,2 @@
+# Ignore release tag URLs — these 404 until the tag is actually created
+https://github\.com/zsoftly/zti-config/releases/tag/.*

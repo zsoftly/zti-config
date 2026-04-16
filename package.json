@@ -1,6 +1,6 @@
 {
   "name": "zti-config",
-  "version": "1.0.0",
+  "version": "0.0.1",
   "description": "Configuration management roles and playbooks for MSP infrastructure tools",
   "scripts": {
     "fmt": "prettier --write '**/*.md'",
