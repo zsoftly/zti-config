@@ -169,6 +169,66 @@
     group: wazuh
   notify: Restart wazuh agent
 
+# Docker monitoring prerequisites — must run after package install (wazuh user created by package)
+- name: Verify docker group exists before adding wazuh user
+  ansible.builtin.getent:
+    database: group
+    key: docker
+  when: wazuh_docker_monitoring_enabled | default(false)
+  failed_when: false
+  register: wazuh_docker_group_check
+
+- name: Fail if docker group does not exist
+  ansible.builtin.fail:
+    msg: >-
+      docker group not found on {{ inventory_hostname }} — Docker Engine must be installed
+      before enabling wazuh_docker_monitoring_enabled. Install Docker and re-run this playbook.
+  when:
+    - wazuh_docker_monitoring_enabled | default(false)
+    - wazuh_docker_group_check.failed | default(true)
+
+- name: Install python3-docker for Docker monitoring wodle
+  when:
+    - wazuh_docker_monitoring_enabled | default(false)
+    - ansible_os_family == "Debian"
+  block:
+    - name: Install python3-docker package
+      ansible.builtin.apt:
+        name: python3-docker
+        state: present
+  rescue:
+    - name: Fail with actionable message if python3-docker unavailable
+      ansible.builtin.fail:
+        msg: >-
+          Failed to install python3-docker on {{ inventory_hostname }} — required by the
+          docker-listener wodle. Ensure the package is available in your apt sources
+          (try: apt-get update) and re-run this playbook.
+
+- name: Install python3-docker for Docker monitoring wodle (RedHat)
+  when:
+    - wazuh_docker_monitoring_enabled | default(false)
+    - ansible_os_family == "RedHat"
+  block:
+    - name: Install python3-docker package
+      ansible.builtin.yum:
+        name: python3-docker
+        state: present
+  rescue:
+    - name: Fail with actionable message if python3-docker unavailable
+      ansible.builtin.fail:
+        msg: >-
+          Failed to install python3-docker on {{ inventory_hostname }} — required by the
+          docker-listener wodle. Ensure the package is available in your yum/dnf repos
+          and re-run this playbook.
+
+- name: Add wazuh user to docker group for socket access
+  ansible.builtin.user:
+    name: wazuh
+    groups: docker
+    append: true
+  when: wazuh_docker_monitoring_enabled | default(false)
+  notify: Restart wazuh agent
+
 # Service
 - name: Start service
   ansible.builtin.systemd:
