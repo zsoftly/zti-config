@@ -116,6 +116,23 @@
     <location>/var/log/kern.log</location>
   </localfile>
 
+{% for lf in wazuh_custom_localfiles | default([]) %}
+  <!-- Custom: {{ lf.location }} -->
+  <localfile>
+    <log_format>{{ lf.log_format | default('syslog') }}</log_format>
+    <location>{{ lf.location }}</location>
+{% if lf.command is defined %}
+    <command>{{ lf.command }}</command>
+{% endif %}
+{% if lf.alias is defined %}
+    <alias>{{ lf.alias }}</alias>
+{% endif %}
+{% if lf.frequency is defined %}
+    <frequency>{{ lf.frequency }}</frequency>
+{% endif %}
+  </localfile>
+
+{% endfor %}
   <!-- Active Response -->
   <active-response>
     <disabled>no</disabled>

@@ -29,3 +29,16 @@ wazuh_remote_commands_enabled: false
 # Requires Docker Engine to be installed before this role runs.
 # The role installs python3-docker and adds wazuh to the docker group automatically.
 wazuh_docker_monitoring_enabled: false
+
+# Custom application logs — list of localfile entries appended to ossec.conf
+# after the standard system logs (syslog/auth/dpkg/kern). Each entry takes:
+#   - location  (required): file path or glob, e.g. "/var/log/myapp/*.log"
+#   - log_format          : default "syslog"; also "command", "full_command", "json", "multi-line", etc.
+#   - command             : for command/full_command formats
+#   - alias               : optional alias for command output
+#   - frequency           : seconds, for command formats
+# Example:
+#   wazuh_custom_localfiles:
+#     - location: /var/log/headscale/*.log
+#       log_format: syslog
+wazuh_custom_localfiles: []
