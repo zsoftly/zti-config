@@ -8,6 +8,25 @@ and this project adheres to
 
 ## [Unreleased]
 
+## [0.0.2] - 2026-04-26
+
+### Fixed
+
+- **wazuh_agent** — `wazuh_custom_localfiles` is now actually consumed by
+  `ossec.conf.j2`. The variable was documented in the role README since
+  0.0.1 but the template never iterated over it, so any custom localfile
+  blocks set by the calling playbook (for example
+  `/var/log/headscale/*.log` on the headscale gateway) were silently
+  dropped on every reconcile and lost from the agent-reported data.
+
+### Added
+
+- **wazuh_agent** — Default `wazuh_custom_localfiles: []` declared in
+  `defaults/main.yml`, with a documented schema covering `location`,
+  `log_format`, and the optional `command`, `alias`, and `frequency` keys
+  for command-format localfiles. Behavior is unchanged when the variable
+  is not set by the consumer.
+
 ## [0.0.1] - 2026-04-16
 
 ### Added
