@@ -26,7 +26,7 @@ jobs:
       contents: write
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
@@ -50,13 +50,13 @@ jobs:
 
       - name: Extract changelog entry
         id: changelog
-        uses: mindsers/changelog-reader-action@97a0b06549019bb99a571f1664272db18031acff # v2
+        uses: mindsers/changelog-reader-action@v2
         with:
           version: ${{ steps.version.outputs.tag }}
           path: ./CHANGELOG.md
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
+        uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.version.outputs.tag }}
           name: ${{ steps.version.outputs.tag }}
